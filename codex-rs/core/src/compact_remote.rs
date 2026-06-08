@@ -35,7 +35,6 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
 use codex_rollout_trace::CompactionTraceContext;
@@ -46,56 +45,9 @@ use tracing::info;
 const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
     "Output exceeded the available model context and was truncated";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RemoteCompactionFailureMode {
-    TerminalError,
-    FallbackToLocal,
-}
-
-pub(crate) async fn run_inline_remote_auto_compact_task(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    initial_context_injection: InitialContextInjection,
-    reason: CompactionReason,
-    phase: CompactionPhase,
-) -> CodexResult<()> {
-    run_remote_compact_task_for_mode(
-        &sess,
-        &turn_context,
-        initial_context_injection,
-        CompactionTrigger::Auto,
-        reason,
-        phase,
-        RemoteCompactionFailureMode::TerminalError,
-    )
-    .await?;
-    Ok(())
-}
-
-pub(crate) async fn run_remote_compact_task(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-) -> CodexResult<()> {
-    let start_event = EventMsg::TurnStarted(TurnStartedEvent {
-        turn_id: turn_context.sub_id.clone(),
-        trace_id: turn_context.trace_id.clone(),
-        started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
-        model_context_window: turn_context.model_context_window(),
-        collaboration_mode_kind: turn_context.collaboration_mode.mode,
-    });
-    sess.send_event(&turn_context, start_event).await;
-
-    run_remote_compact_task_for_mode(
-        &sess,
-        &turn_context,
-        InitialContextInjection::DoNotInject,
-        CompactionTrigger::Manual,
-        CompactionReason::UserRequested,
-        CompactionPhase::StandaloneTurn,
-        RemoteCompactionFailureMode::TerminalError,
-    )
-    .await?;
-    Ok(())
+#[derive(Clone, Debug)]
+pub(crate) struct RemoteCompactionRunSettings {
+    pub(crate) service_tier_override: Option<String>,
 }
 
 pub(crate) async fn run_remote_compact_task_for_mode(
@@ -105,7 +57,7 @@ pub(crate) async fn run_remote_compact_task_for_mode(
     trigger: CompactionTrigger,
     reason: CompactionReason,
     phase: CompactionPhase,
-    failure_mode: RemoteCompactionFailureMode,
+    settings: RemoteCompactionRunSettings,
 ) -> CodexResult<()> {
     let compaction_metadata = CompactionTurnMetadata::new(
         trigger,
@@ -145,7 +97,7 @@ pub(crate) async fn run_remote_compact_task_for_mode(
         initial_context_injection,
         compaction_metadata,
         &mut active_context_tokens_before,
-        failure_mode,
+        &settings,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -172,16 +124,7 @@ pub(crate) async fn run_remote_compact_task_for_mode(
             Some(active_context_tokens_before),
         )
         .await;
-    if let Err(err) = result {
-        if matches!(failure_mode, RemoteCompactionFailureMode::TerminalError) {
-            sess.track_turn_codex_error(turn_context, &err);
-            let event = EventMsg::Error(
-                err.to_error_event(Some("Error running remote compact task".to_string())),
-            );
-            sess.send_event(turn_context, event).await;
-        }
-        return Err(err);
-    }
+    result?;
     Ok(())
 }
 
@@ -191,7 +134,7 @@ async fn run_remote_compact_task_inner_impl(
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
     active_context_tokens_before: &mut i64,
-    failure_mode: RemoteCompactionFailureMode,
+    settings: &RemoteCompactionRunSettings,
 ) -> CodexResult<()> {
     let context_compaction_item = ContextCompactionItem::new();
     // Use the UI compaction item ID as the trace compaction ID so protocol lifecycle events,
@@ -203,10 +146,6 @@ async fn run_remote_compact_task_inner_impl(
         turn_context.provider.info().name.as_str(),
     );
     let compaction_item = TurnItem::ContextCompaction(context_compaction_item);
-    if matches!(failure_mode, RemoteCompactionFailureMode::TerminalError) {
-        sess.emit_turn_item_started(turn_context, &compaction_item)
-            .await;
-    }
     let mut history = sess.clone_history().await;
     let base_instructions = sess.get_base_instructions().await;
     let (rewritten_outputs, estimated_deleted_tokens) =
@@ -260,6 +199,7 @@ async fn run_remote_compact_task_inner_impl(
         &prompt,
         &compaction_trace,
         turn_metadata_header.as_deref(),
+        settings,
     )
     .await?;
     new_history = process_compacted_history(
@@ -278,10 +218,8 @@ async fn run_remote_compact_task_inner_impl(
         message: String::new(),
         replacement_history: Some(new_history.clone()),
     };
-    if matches!(failure_mode, RemoteCompactionFailureMode::FallbackToLocal) {
-        sess.emit_turn_item_started(turn_context, &compaction_item)
-            .await;
-    }
+    sess.emit_turn_item_started(turn_context, &compaction_item)
+        .await;
     // Install is the semantic boundary where the compact endpoint's output becomes live
     // thread history. Keep it distinct from the later inference request so the reducer can
     // still represent repeated developer/context prefix items exactly as the model saw them.
@@ -304,6 +242,7 @@ async fn run_remote_compaction_request_v1(
     prompt: &Prompt,
     compaction_trace: &CompactionTraceContext,
     turn_metadata_header: Option<&str>,
+    settings: &RemoteCompactionRunSettings,
 ) -> CodexResult<Vec<ResponseItem>> {
     let total_attempts = turn_context.config.remote_compact.max_attempts;
     let attempt_timeout = turn_context.config.remote_compact.attempt_timeout;
@@ -311,11 +250,13 @@ async fn run_remote_compaction_request_v1(
     let mut last_remote_error = None;
 
     for attempt_number in 1..=total_attempts {
-        let service_tier = if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
-            None
-        } else {
-            turn_context.config.service_tier.clone()
-        };
+        let service_tier = settings.service_tier_override.clone().or_else(|| {
+            if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
+                None
+            } else {
+                turn_context.config.service_tier.clone()
+            }
+        });
         let result = sess
             .services
             .model_client

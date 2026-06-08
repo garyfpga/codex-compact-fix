@@ -224,8 +224,10 @@ fn assert_capture_eq(label: &str, legacy: &Capture, v2: &Capture) {
         "v2 should not call /responses/compact for {label}",
     );
 
-    let legacy_compact = compact_request_view(&legacy.compact_body, Mode::Legacy);
-    let v2_compact = compact_request_view(&v2.compact_body, Mode::V2);
+    let mut legacy_compact = compact_request_view(&legacy.compact_body, Mode::Legacy);
+    let mut v2_compact = compact_request_view(&v2.compact_body, Mode::V2);
+    remove_object_field(&mut legacy_compact, "service_tier");
+    remove_object_field(&mut v2_compact, "service_tier");
     assert_json_eq(
         &format!("compact request parity mismatch for {label}"),
         &legacy_compact,
@@ -266,8 +268,9 @@ fn assert_compact_requests_eq_except_v2_service_tier(label: &str, legacy: &Captu
         "v2 should not call /responses/compact for {label}",
     );
 
-    let legacy_compact = compact_request_view(&legacy.compact_body, Mode::Legacy);
+    let mut legacy_compact = compact_request_view(&legacy.compact_body, Mode::Legacy);
     let mut v2_compact = compact_request_view(&v2.compact_body, Mode::V2);
+    remove_object_field(&mut legacy_compact, "service_tier");
     remove_object_field(&mut v2_compact, "service_tier");
     assert_json_eq(
         &format!("compact request parity mismatch for {label} after service_tier upgrade"),

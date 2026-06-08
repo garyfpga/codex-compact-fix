@@ -69,6 +69,11 @@ pub(crate) enum PreCompactHookPolicy {
     SkipAlreadyRan,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LocalCompactRunSettings {
+    pub(crate) service_tier_override: Option<String>,
+}
+
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.supports_remote_compaction()
 }
@@ -99,6 +104,27 @@ pub(crate) async fn run_inline_auto_compact_task_with_pre_hook_policy(
     phase: CompactionPhase,
     pre_compact_hook_policy: PreCompactHookPolicy,
 ) -> CodexResult<()> {
+    run_inline_auto_compact_task_with_pre_hook_policy_and_settings(
+        sess,
+        turn_context,
+        initial_context_injection,
+        reason,
+        phase,
+        pre_compact_hook_policy,
+        LocalCompactRunSettings::default(),
+    )
+    .await
+}
+
+pub(crate) async fn run_inline_auto_compact_task_with_pre_hook_policy_and_settings(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    initial_context_injection: InitialContextInjection,
+    reason: CompactionReason,
+    phase: CompactionPhase,
+    pre_compact_hook_policy: PreCompactHookPolicy,
+    local_run_settings: LocalCompactRunSettings,
+) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
         text: prompt,
@@ -116,6 +142,7 @@ pub(crate) async fn run_inline_auto_compact_task_with_pre_hook_policy(
             reason,
             phase,
             pre_compact_hook_policy,
+            local_run_settings,
         },
     )
     .await?;
@@ -137,6 +164,23 @@ pub(crate) async fn run_compact_task_after_turn_started(
     input: Vec<UserInput>,
     pre_compact_hook_policy: PreCompactHookPolicy,
 ) -> CodexResult<()> {
+    run_compact_task_after_turn_started_with_settings(
+        sess,
+        turn_context,
+        input,
+        pre_compact_hook_policy,
+        LocalCompactRunSettings::default(),
+    )
+    .await
+}
+
+pub(crate) async fn run_compact_task_after_turn_started_with_settings(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    input: Vec<UserInput>,
+    pre_compact_hook_policy: PreCompactHookPolicy,
+    local_run_settings: LocalCompactRunSettings,
+) -> CodexResult<()> {
     run_compact_task_inner(
         sess,
         turn_context,
@@ -147,6 +191,7 @@ pub(crate) async fn run_compact_task_after_turn_started(
             reason: CompactionReason::UserRequested,
             phase: CompactionPhase::StandaloneTurn,
             pre_compact_hook_policy,
+            local_run_settings,
         },
     )
     .await?;
@@ -170,6 +215,7 @@ struct CompactTaskRunSettings {
     reason: CompactionReason,
     phase: CompactionPhase,
     pre_compact_hook_policy: PreCompactHookPolicy,
+    local_run_settings: LocalCompactRunSettings,
 }
 
 async fn run_compact_task_inner(
@@ -219,6 +265,7 @@ async fn run_compact_task_inner(
         input,
         settings.initial_context_injection,
         compaction_metadata,
+        &settings.local_run_settings,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -255,6 +302,7 @@ async fn run_compact_task_inner_impl(
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
+    local_run_settings: &LocalCompactRunSettings,
 ) -> CodexResult<String> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -296,6 +344,7 @@ async fn run_compact_task_inner_impl(
             &mut client_session,
             turn_metadata_header.as_deref(),
             &prompt,
+            local_run_settings,
         )
         .await;
 
@@ -625,7 +674,12 @@ async fn drain_to_completed(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     prompt: &Prompt,
+    settings: &LocalCompactRunSettings,
 ) -> CodexResult<()> {
+    let service_tier = settings
+        .service_tier_override
+        .clone()
+        .or_else(|| turn_context.config.service_tier.clone());
     let mut stream = client_session
         .stream(
             prompt,
@@ -633,7 +687,7 @@ async fn drain_to_completed(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
-            turn_context.config.service_tier.clone(),
+            service_tier,
             turn_metadata_header,
             // Rollout tracing currently models remote compaction only; local compaction streams
             // are left untraced until the reducer has a first-class local compaction lifecycle.

@@ -11,6 +11,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
@@ -333,13 +334,12 @@ fn assert_remote_compact_fallback_warnings(warnings: &[String]) {
 }
 
 fn assert_remote_compact_fallback_warning_count(warnings: &[String], total_attempts: usize) {
-    let attempt_warnings = warnings
+    let attempt_warning_count = warnings
         .iter()
         .filter(|message| message.starts_with("Remote compact attempt "))
-        .collect::<Vec<_>>();
+        .count();
     assert_eq!(
-        attempt_warnings.len(),
-        total_attempts,
+        attempt_warning_count, total_attempts,
         "expected one visible warning for each remote compact attempt, got {warnings:?}"
     );
     assert_eq!(
@@ -389,6 +389,29 @@ fn assert_local_fallback_compact_request_is_clean(
     );
 }
 
+fn compact_service_tier_switch_messages(original_service_tier: &str) -> (String, String) {
+    (
+        format!(
+            "Compact operations are using fast service tier (priority); normal requests will return to {original_service_tier} afterward."
+        ),
+        format!(
+            "Compact operations finished; normal requests are using {original_service_tier} service tier again."
+        ),
+    )
+}
+
+fn assert_request_does_not_contain_texts(
+    request: &responses::ResponsesRequest,
+    forbidden_texts: &[&str],
+) {
+    for forbidden_text in forbidden_texts {
+        assert!(
+            !request.body_contains_text(forbidden_text),
+            "request body should not contain `{forbidden_text}`"
+        );
+    }
+}
+
 fn invalid_remote_compact_output_payload() -> Value {
     json!({ "output": FAILED_REMOTE_OUTPUT_TEXT })
 }
@@ -411,12 +434,28 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
-        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model_info_override("gpt-5.4", |model_info| {
+                model_info.service_tiers = vec![ModelServiceTier {
+                    id: ServiceTier::Fast.request_value().to_string(),
+                    name: "fast".to_string(),
+                    description: "Fast processing.".to_string(),
+                }];
+            }),
     )
     .await?;
     let codex = harness.test().codex.clone();
     let session_id = harness.test().session_configured.session_id.to_string();
     let thread_id = harness.test().session_configured.thread_id.to_string();
+    let original_service_tier = harness
+        .test()
+        .config
+        .service_tier
+        .as_deref()
+        .unwrap_or("default");
+    let (compact_start_status, compact_finish_status) =
+        compact_service_tier_switch_messages(original_service_tier);
 
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),
@@ -458,7 +497,12 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     wait_for_turn_complete(&codex).await;
 
     codex.submit(Op::Compact).await?;
-    wait_for_turn_complete(&codex).await;
+    let warnings = collect_warnings_until_turn_complete(&codex).await;
+    assert_eq!(
+        warnings,
+        vec![compact_start_status.clone(), compact_finish_status.clone()],
+        "expected the compact turn to emit the fast-tier switch status messages"
+    );
 
     codex
         .submit(Op::UserInput {
@@ -528,6 +572,11 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         compact_body.get("model").and_then(|v| v.as_str()),
         Some(harness.test().session_configured.model.as_str())
     );
+    assert_eq!(
+        compact_body.get("service_tier").and_then(Value::as_str),
+        Some("priority"),
+        "expected ChatGPT-auth remote compaction to use the fast service tier"
+    );
     let response_requests = responses_mock.requests();
     let first_response_request = response_requests.first().expect("initial request missing");
     let first_response_metadata: Value = serde_json::from_str(
@@ -560,6 +609,11 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         first_response_request.body_json()["text"],
         "compact requests should match /v1/responses text controls"
     );
+    assert_eq!(
+        first_response_request.body_json().get("service_tier"),
+        None,
+        "the original sampling request should keep the default service tier"
+    );
     let compact_body_text = compact_body.to_string();
     assert!(
         compact_body_text.contains("hello remote compact"),
@@ -568,6 +622,10 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     assert!(
         compact_body_text.contains("FIRST_REMOTE_REPLY"),
         "expected compact request to include assistant history"
+    );
+    assert_request_does_not_contain_texts(
+        &compact_request,
+        &[&compact_start_status, &compact_finish_status],
     );
 
     let response_requests = responses_mock.requests();
@@ -600,6 +658,11 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         "the following user turn should use the new compacted context window"
     );
     let follow_up_body = follow_up_request.body_json().to_string();
+    assert_eq!(
+        follow_up_request.body_json().get("service_tier"),
+        None,
+        "the post-compact sampling request should return to the original service tier"
+    );
     assert!(
         follow_up_body.contains("\"type\":\"compaction\""),
         "expected follow-up request to use compacted history"
@@ -615,6 +678,10 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     assert!(
         !follow_up_body.contains("hello remote compact"),
         "expected follow-up request to drop compacted-away user turns when remote output omits them"
+    );
+    assert_request_does_not_contain_texts(
+        follow_up_request,
+        &[&compact_start_status, &compact_finish_status],
     );
 
     insta::assert_snapshot!(
@@ -2445,12 +2512,27 @@ async fn remote_manual_compact_failure_falls_back_to_local_compact() -> Result<(
     let harness = TestCodexHarness::with_builder(
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model_info_override("gpt-5.4", |model_info| {
+                model_info.service_tiers = vec![ModelServiceTier {
+                    id: ServiceTier::Fast.request_value().to_string(),
+                    name: "fast".to_string(),
+                    description: "Fast processing.".to_string(),
+                }];
+            })
             .with_config(|config| {
                 config.remote_compact = remote_compact_config(2, 180, 1000);
             }),
     )
     .await?;
     let codex = harness.test().codex.clone();
+    let original_service_tier = harness
+        .test()
+        .config
+        .service_tier
+        .as_deref()
+        .unwrap_or("default");
+    let (compact_start_status, compact_finish_status) =
+        compact_service_tier_switch_messages(original_service_tier);
 
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),
@@ -2468,6 +2550,10 @@ async fn remote_manual_compact_failure_falls_back_to_local_compact() -> Result<(
                     "local-manual-fallback-response",
                     /*total_tokens*/ 80,
                 ),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_FALLBACK_REPLY"),
+                responses::ev_completed("resp-2"),
             ]),
         ],
     )
@@ -2504,7 +2590,48 @@ async fn remote_manual_compact_failure_falls_back_to_local_compact() -> Result<(
     codex.submit(Op::Compact).await?;
 
     let warnings = collect_warnings_until_turn_complete(&codex).await;
+    assert_eq!(
+        warnings.first().map(String::as_str),
+        Some(compact_start_status.as_str()),
+        "expected the fast-tier switch status message before remote retries"
+    );
+    assert_eq!(
+        warnings.last().map(String::as_str),
+        Some(compact_finish_status.as_str()),
+        "expected the fast-tier restore status message after local fallback"
+    );
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|warning| warning.as_str() == compact_start_status.as_str())
+            .count(),
+        1,
+        "expected exactly one fast-tier switch status message, got {warnings:?}"
+    );
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|warning| warning.as_str() == compact_finish_status.as_str())
+            .count(),
+        1,
+        "expected exactly one fast-tier restore status message, got {warnings:?}"
+    );
     assert_remote_compact_fallback_warning_count(&warnings, 2);
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
 
     let compact_requests = compact_mocks
         .iter()
@@ -2521,15 +2648,35 @@ async fn remote_manual_compact_failure_falls_back_to_local_compact() -> Result<(
             .all(|request| request.path() == "/v1/responses/compact"),
         "expected all remote attempts to hit /v1/responses/compact"
     );
+    let warning_texts = warnings.iter().map(String::as_str).collect::<Vec<_>>();
+    for request in &compact_requests {
+        assert_eq!(
+            request
+                .body_json()
+                .get("service_tier")
+                .and_then(Value::as_str),
+            Some("priority"),
+            "expected remote compact attempts to use the fast service tier"
+        );
+        assert_request_does_not_contain_texts(request, &warning_texts);
+    }
 
     let response_requests = responses_mock.requests();
     assert_eq!(
         response_requests.len(),
-        2,
-        "expected initial turn and local fallback compact request"
+        3,
+        "expected initial turn, local fallback compact request, and follow-up sampling request"
     );
     let local_fallback_compact_request = &response_requests[1];
     assert_local_fallback_compact_request_is_clean(local_fallback_compact_request, &warnings);
+    assert_eq!(
+        local_fallback_compact_request
+            .body_json()
+            .get("service_tier")
+            .and_then(Value::as_str),
+        Some("priority"),
+        "expected local fallback compact to reuse the fast service tier"
+    );
     let local_fallback_compact_body = local_fallback_compact_request.body_json().to_string();
     assert!(
         local_fallback_compact_body.contains("manual remote compact"),
@@ -2538,6 +2685,117 @@ async fn remote_manual_compact_failure_falls_back_to_local_compact() -> Result<(
     assert!(
         local_fallback_compact_body.contains("REMOTE_REPLY"),
         "expected fallback local compact request to retain pre-compaction assistant history"
+    );
+    let post_fallback_turn_request = &response_requests[2];
+    assert_eq!(
+        post_fallback_turn_request.body_json().get("service_tier"),
+        None,
+        "expected post-fallback sampling to return to the original service tier"
+    );
+    let post_fallback_turn_body = post_fallback_turn_request.body_json().to_string();
+    assert!(
+        post_fallback_turn_body.contains("LOCAL_MANUAL_FALLBACK_SUMMARY"),
+        "expected post-fallback sampling request to use the fallback compact summary"
+    );
+    assert_request_does_not_contain_texts(post_fallback_turn_request, &warning_texts);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v1_without_priority_support_keeps_original_service_tier_and_emits_no_switch_warnings()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model_info_override("gpt-5.4", |model_info| {
+                model_info.service_tiers.clear();
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let compact_mock = responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({
+            "output": compacted_summary_only_output("ENCRYPTED_COMPACTION_SUMMARY"),
+        }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    let warnings = collect_warnings_until_turn_complete(&codex).await;
+    assert!(
+        warnings.is_empty(),
+        "expected no status warnings when the model does not support priority"
+    );
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let compact_request = compact_mock.single_request();
+    assert_eq!(compact_request.path(), "/v1/responses/compact");
+    assert_eq!(
+        compact_request.body_json().get("service_tier"),
+        None,
+        "unsupported priority should not be forced into remote compaction"
+    );
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        2,
+        "expected initial turn and post-compact follow-up"
+    );
+    let follow_up_request = response_requests.last().expect("follow-up request missing");
+    assert_eq!(
+        follow_up_request.body_json().get("service_tier"),
+        None,
+        "expected normal sampling to keep the original tier when priority is unsupported"
     );
 
     Ok(())
@@ -2755,7 +3013,7 @@ async fn remote_manual_compact_unexpected_http_warning_includes_cf_ray() -> Resu
             "expected unexpected HTTP warning to use the categorized prefix, got {message}"
         );
         assert!(
-            message.contains("unexpected status 503: bot-check interstitial"),
+            message.contains("unexpected status 503 Service Unavailable: bot-check interstitial"),
             "expected unexpected HTTP warning to include a bounded response body and status, got {message}"
         );
         assert!(
@@ -3753,6 +4011,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
+                config.model_provider.stream_max_retries = Some(0);
                 config.model_auto_compact_token_limit = Some(200);
             }),
     )
@@ -4000,10 +4259,37 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
 
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),
-        vec![responses::sse(vec![
-            responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
-            responses::ev_completed_with_tokens("r1", /*total_tokens*/ 500),
-        ])],
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+                responses::ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+            ]),
+            responses::sse_failed(
+                "local-fallback-compact-failed-1",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            responses::sse_failed(
+                "local-fallback-compact-failed-2",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            responses::sse_failed(
+                "local-fallback-compact-failed-3",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            responses::sse_failed(
+                "local-fallback-compact-failed-4",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            responses::sse_failed(
+                "local-fallback-compact-failed-5",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+        ],
     )
     .await;
 
@@ -4017,15 +4303,6 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
         })),
     )
     .await;
-    let post_compact_turn_mock = responses::mount_sse_once(
-        harness.server(),
-        responses::sse(vec![
-            responses::ev_assistant_message("m2", "REMOTE_POST_COMPACT_SHOULD_NOT_RUN"),
-            responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
-        ]),
-    )
-    .await;
-
     codex
         .submit(Op::UserInput {
             environments: None,
@@ -4063,14 +4340,24 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
 
     assert_eq!(compact_mock.requests().len(), 1);
     let requests = responses_mock.requests();
-    assert_eq!(
-        requests.len(),
-        1,
-        "expected no post-compaction follow-up turn request after compact failure"
+    assert!(
+        requests.len() >= 2,
+        "expected initial turn request and local fallback compact request"
+    );
+    let local_fallback_compact_request = &requests[1];
+    assert!(
+        local_fallback_compact_request
+            .body_json()
+            .to_string()
+            .contains("USER_ONE"),
+        "local fallback compact request should preserve pre-compaction history"
     );
     assert!(
-        post_compact_turn_mock.requests().is_empty(),
-        "expected turn to stop after compaction failure"
+        !local_fallback_compact_request
+            .body_json()
+            .to_string()
+            .contains("USER_TWO"),
+        "current behavior excludes incoming user from fallback pre-turn compaction input"
     );
 
     let include_attempt_request = compact_mock.single_request();
