@@ -435,8 +435,13 @@ fn remote_compaction_attempt_warning_message(
             )
         }
         RemoteCompactionAttemptWarningKind::ProtocolBodyParse => {
+            let detail = if let CodexErr::Stream(message, _) = err {
+                message.clone()
+            } else {
+                err.to_string()
+            };
             format!(
-                "Remote compact attempt {attempt_number}/{total_attempts} failed to parse remote compact response: {err}{action}"
+                "Remote compact attempt {attempt_number}/{total_attempts} failed to parse remote compact response: {detail}{action}"
             )
         }
         RemoteCompactionAttemptWarningKind::Other => {
@@ -460,9 +465,14 @@ fn remote_compaction_attempt_warning_kind(err: &CodexErr) -> RemoteCompactionAtt
     match err {
         CodexErr::RequestTimeout | CodexErr::Timeout => RemoteCompactionAttemptWarningKind::Timeout,
         CodexErr::UnexpectedStatus(_) => RemoteCompactionAttemptWarningKind::UnexpectedHttp,
-        CodexErr::Stream(..)
-        | CodexErr::ConnectionFailed(_)
-        | CodexErr::ResponseStreamFailed(_) => {
+        CodexErr::Stream(message, _) => {
+            if message.contains(" at line ") && message.contains(" column ") {
+                RemoteCompactionAttemptWarningKind::ProtocolBodyParse
+            } else {
+                RemoteCompactionAttemptWarningKind::TransportOrStream
+            }
+        }
+        CodexErr::ConnectionFailed(_) | CodexErr::ResponseStreamFailed(_) => {
             RemoteCompactionAttemptWarningKind::TransportOrStream
         }
         CodexErr::Json(_) => RemoteCompactionAttemptWarningKind::ProtocolBodyParse,
