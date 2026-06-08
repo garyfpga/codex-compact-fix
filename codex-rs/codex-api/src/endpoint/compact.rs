@@ -5,6 +5,7 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
+use codex_client::RetryPolicy;
 use codex_protocol::models::ResponseItem;
 use http::HeaderMap;
 use http::Method;
@@ -40,13 +41,30 @@ impl<T: HttpTransport> CompactClient<T> {
         extra_headers: HeaderMap,
         request_timeout: Duration,
     ) -> Result<Vec<ResponseItem>, ApiError> {
+        self.execute_compact(
+            body,
+            extra_headers,
+            request_timeout,
+            self.session.provider().retry.to_policy(),
+        )
+        .await
+    }
+
+    async fn execute_compact(
+        &self,
+        body: serde_json::Value,
+        extra_headers: HeaderMap,
+        request_timeout: Duration,
+        retry_policy: RetryPolicy,
+    ) -> Result<Vec<ResponseItem>, ApiError> {
         let resp = self
             .session
-            .execute_with(
+            .execute_with_policy(
                 Method::POST,
                 Self::path(),
                 extra_headers,
                 Some(body),
+                retry_policy,
                 |req| {
                     req.timeout = Some(request_timeout);
                 },
@@ -63,9 +81,26 @@ impl<T: HttpTransport> CompactClient<T> {
         extra_headers: HeaderMap,
         request_timeout: Duration,
     ) -> Result<Vec<ResponseItem>, ApiError> {
+        self.compact_input_with_policy(
+            input,
+            extra_headers,
+            request_timeout,
+            self.session.provider().retry.to_policy(),
+        )
+        .await
+    }
+
+    pub async fn compact_input_with_policy(
+        &self,
+        input: &CompactionInput<'_>,
+        extra_headers: HeaderMap,
+        request_timeout: Duration,
+        retry_policy: RetryPolicy,
+    ) -> Result<Vec<ResponseItem>, ApiError> {
         let body = to_value(input)
             .map_err(|e| ApiError::Stream(format!("failed to encode compaction input: {e}")))?;
-        self.compact(body, extra_headers, request_timeout).await
+        self.execute_compact(body, extra_headers, request_timeout, retry_policy)
+            .await
     }
 }
 

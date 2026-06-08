@@ -19,6 +19,7 @@ mod codex_thread;
 mod compact_remote;
 mod compact_remote_v2;
 mod config_lock;
+mod remote_compact_fallback;
 pub use codex_thread::CodexThread;
 pub use codex_thread::CodexThreadSettingsOverrides;
 pub use codex_thread::ThreadConfigSnapshot;

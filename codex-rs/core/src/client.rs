@@ -150,15 +150,14 @@ const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
     "x-openai-internal-codex-responses-lite";
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
-// `/responses/compact` is unary, so the timeout covers the full response rather than one idle
-// period between stream events.
-const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
 
 pub(crate) struct CompactConversationRequestSettings {
+    pub(crate) request_timeout: Duration,
+    pub(crate) retry_policy: codex_api::RetryPolicy,
     pub(crate) effort: Option<ReasoningEffortConfig>,
     pub(crate) summary: ReasoningSummaryConfig,
     pub(crate) service_tier: Option<String>,
@@ -531,16 +530,17 @@ impl ModelClient {
             extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
         add_responses_lite_header(&mut extra_headers, model_info.use_responses_lite);
-        let compact_request_timeout = client_setup
-            .api_provider
-            .stream_idle_timeout
-            .saturating_mul(COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER);
         let client =
             ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
         let trace_attempt = compaction_trace.start_attempt(&payload);
         let result = client
-            .compact_input(&payload, extra_headers, compact_request_timeout)
+            .compact_input_with_policy(
+                &payload,
+                extra_headers,
+                settings.request_timeout,
+                settings.retry_policy,
+            )
             .await
             .map_err(map_api_error);
         trace_attempt.record_result(result.as_deref());

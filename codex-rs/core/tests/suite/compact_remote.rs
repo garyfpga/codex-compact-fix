@@ -131,6 +131,10 @@ fn canonical_json(value: &Value) -> Value {
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
 const REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
+const FAILED_REMOTE_OUTPUT_TEXT: &str = "FAILED_REMOTE_OUTPUT_SHOULD_NOT_REACH_LOCAL_FALLBACK";
+const FAILED_REMOTE_CONTEXT_COMPACTION_TEXT: &str =
+    "FAILED_REMOTE_CONTEXT_COMPACTION_SHOULD_NOT_REACH_LOCAL_FALLBACK";
+const REMOTE_FAILURE_MESSAGE_TEXT: &str = "REMOTE_FAILURE_MESSAGE_SHOULD_NOT_REACH_LOCAL_FALLBACK";
 
 fn summary_with_prefix(summary: &str) -> String {
     format!("{SUMMARY_PREFIX}\n{summary}")
@@ -284,6 +288,99 @@ async fn wait_for_turn_complete(codex: &codex_core::CodexThread) {
         REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT,
     )
     .await;
+}
+
+async fn collect_warnings_until_turn_complete(codex: &codex_core::CodexThread) -> Vec<String> {
+    let mut warnings = Vec::new();
+    loop {
+        let event = codex.next_event().await.expect("next event");
+        match event.msg {
+            EventMsg::Warning(warning) => warnings.push(warning.message),
+            EventMsg::Error(err) => panic!("unexpected terminal error event: {err:?}"),
+            EventMsg::TurnComplete(_) => return warnings,
+            _ => {}
+        }
+    }
+}
+
+fn assert_remote_compact_fallback_warnings(warnings: &[String]) {
+    let attempt_warnings = warnings
+        .iter()
+        .filter(|message| message.starts_with("Remote compact attempt "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        attempt_warnings.len(),
+        3,
+        "expected one visible warning for each remote compact attempt, got {warnings:?}"
+    );
+    for (attempt_number, message) in (1..=3).zip(attempt_warnings) {
+        let expected_attempt = format!("Remote compact attempt {attempt_number}/3 ");
+        assert!(
+            message.starts_with(&expected_attempt)
+                && (message.contains("failed") || message.contains("timed out after 180s")),
+            "expected visible warning for attempt {attempt_number}/3, got {message}"
+        );
+    }
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|message| {
+                message.as_str()
+                    == "Remote compact failed after 3 attempts; falling back to local compact."
+            })
+            .count(),
+        1,
+        "expected one visible local compact fallback warning, got {warnings:?}"
+    );
+}
+
+fn assert_local_fallback_compact_request_is_clean(
+    request: &responses::ResponsesRequest,
+    warning_messages: &[String],
+) {
+    for forbidden_text in [
+        "Error running remote compact task",
+        REMOTE_FAILURE_MESSAGE_TEXT,
+        FAILED_REMOTE_OUTPUT_TEXT,
+        FAILED_REMOTE_CONTEXT_COMPACTION_TEXT,
+    ] {
+        assert!(
+            !request.body_contains_text(forbidden_text),
+            "local fallback compact request should not contain `{forbidden_text}`"
+        );
+    }
+
+    for warning_message in warning_messages {
+        assert!(
+            !request.body_contains_text(warning_message),
+            "local fallback compact request should not contain warning text `{warning_message}`"
+        );
+    }
+
+    assert!(
+        !request
+            .body_json()
+            .to_string()
+            .contains("context_compaction"),
+        "local fallback compact request should not contain failed remote ContextCompaction items"
+    );
+}
+
+fn invalid_remote_compact_output_payload() -> Value {
+    json!({ "output": FAILED_REMOTE_OUTPUT_TEXT })
+}
+
+fn invalid_remote_context_compaction_payload() -> Value {
+    json!({
+        "output": [{
+            "type": "context_compaction",
+            "encrypted_content": { "text": FAILED_REMOTE_CONTEXT_COMPACTION_TEXT },
+        }]
+    })
+}
+
+fn invalid_remote_failure_message_payload() -> Value {
+    json!({ "output": REMOTE_FAILURE_MESSAGE_TEXT })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1855,7 +1952,7 @@ async fn remote_compact_trims_tool_search_output_to_empty_tools_array() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
+async fn auto_remote_compact_failure_falls_back_to_local_compact() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
@@ -1868,28 +1965,51 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
     .await?;
     let codex = harness.test().codex.clone();
 
-    mount_sse_once(
+    let responses_mock = responses::mount_sse_sequence(
         harness.server(),
-        sse(vec![
-            responses::ev_assistant_message("initial-assistant", "initial turn complete"),
-            responses::ev_completed_with_tokens("initial-response", /*total_tokens*/ 500_000),
-        ]),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("initial-assistant", "initial turn complete"),
+                responses::ev_completed_with_tokens(
+                    "initial-response",
+                    /*total_tokens*/ 500_000,
+                ),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("local-fallback-summary", "LOCAL_FALLBACK_SUMMARY"),
+                responses::ev_completed_with_tokens(
+                    "local-fallback-response",
+                    /*total_tokens*/ 80,
+                ),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("post-fallback-assistant", "post fallback ran"),
+                responses::ev_completed_with_tokens(
+                    "post-fallback-response",
+                    /*total_tokens*/ 80,
+                ),
+            ]),
+        ],
     )
     .await;
 
-    let first_compact_mock = responses::mount_compact_json_once(
-        harness.server(),
-        serde_json::json!({ "output": "invalid compact payload shape" }),
-    )
-    .await;
-    let post_compact_turn_mock = mount_sse_once(
-        harness.server(),
-        sse(vec![
-            responses::ev_assistant_message("post-compact-assistant", "should not run"),
-            responses::ev_completed("post-compact-response"),
-        ]),
-    )
-    .await;
+    let compact_mocks = [
+        responses::mount_compact_json_once(
+            harness.server(),
+            invalid_remote_compact_output_payload(),
+        )
+        .await,
+        responses::mount_compact_json_once(
+            harness.server(),
+            invalid_remote_context_compaction_payload(),
+        )
+        .await,
+        responses::mount_compact_json_once(
+            harness.server(),
+            invalid_remote_failure_message_payload(),
+        )
+        .await,
+    ];
 
     codex
         .submit(Op::UserInput {
@@ -1920,35 +2040,67 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
         })
         .await?;
 
-    let error_message = wait_for_event_match(&codex, |event| match event {
-        EventMsg::Error(err) => Some(err.message.clone()),
-        _ => None,
-    })
-    .await;
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    let warnings = collect_warnings_until_turn_complete(&codex).await;
+    assert_remote_compact_fallback_warnings(&warnings);
 
-    assert!(
-        error_message.contains("Error running remote compact task"),
-        "expected remote compact task error prefix, got {error_message}"
-    );
+    let compact_requests = compact_mocks
+        .iter()
+        .flat_map(core_test_support::responses::ResponseMock::requests)
+        .collect::<Vec<_>>();
     assert_eq!(
-        first_compact_mock.requests().len(),
-        1,
-        "expected first remote compact attempt with incoming items"
+        compact_requests.len(),
+        3,
+        "expected three remote compact attempts before local fallback"
     );
     assert!(
-        post_compact_turn_mock.requests().is_empty(),
-        "expected agent loop to stop after compaction failure"
+        compact_requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses/compact"),
+        "expected all remote attempts to hit /v1/responses/compact"
+    );
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        3,
+        "expected initial turn, local fallback compact request, and post-fallback sampling request"
+    );
+    let local_fallback_compact_request = &response_requests[1];
+    assert_local_fallback_compact_request_is_clean(local_fallback_compact_request, &warnings);
+    let local_fallback_compact_body = local_fallback_compact_request.body_json().to_string();
+    assert!(
+        local_fallback_compact_body.contains("turn that exceeds token threshold"),
+        "expected fallback local compact request to retain previous history"
+    );
+    assert!(
+        !local_fallback_compact_body.contains("turn that triggers auto compact"),
+        "expected fallback local compact request to exclude incoming user message"
+    );
+    let post_fallback_turn_body = response_requests[2].body_json().to_string();
+    assert!(
+        post_fallback_turn_body.contains("LOCAL_FALLBACK_SUMMARY"),
+        "expected post-fallback sampling request to use local compact summary"
+    );
+    assert!(
+        post_fallback_turn_body.contains("turn that triggers auto compact"),
+        "expected agent loop to continue with the pending user turn after local fallback"
     );
 
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_failure_shapes",
         format_labeled_requests_snapshot(
-            "Remote pre-turn auto-compaction parse failure: compaction request excludes the incoming user message and the turn stops.",
-            &[(
-                "Remote Compaction Request (Incoming User Excluded)",
-                &first_compact_mock.single_request()
-            ),]
+            "Remote pre-turn auto-compaction parse failure: three remote attempts fail, local compact runs without polluted failure history, and the turn continues.",
+            &[
+                (
+                    "Remote Compaction Request (Incoming User Excluded)",
+                    &compact_requests[0]
+                ),
+                (
+                    "Local Fallback Compaction Request",
+                    local_fallback_compact_request
+                ),
+                ("Post-Fallback Sampling Request", &response_requests[2]),
+            ]
         )
     );
 
@@ -2264,7 +2416,7 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_manual_compact_failure_emits_task_error_event() -> Result<()> {
+async fn remote_manual_compact_failure_falls_back_to_local_compact() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
@@ -2273,20 +2425,44 @@ async fn remote_manual_compact_failure_emits_task_error_event() -> Result<()> {
     .await?;
     let codex = harness.test().codex.clone();
 
-    mount_sse_once(
+    let responses_mock = responses::mount_sse_sequence(
         harness.server(),
-        sse(vec![
-            responses::ev_assistant_message("m1", "REMOTE_REPLY"),
-            responses::ev_completed("resp-1"),
-        ]),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message(
+                    "local-manual-fallback-summary",
+                    "LOCAL_MANUAL_FALLBACK_SUMMARY",
+                ),
+                responses::ev_completed_with_tokens(
+                    "local-manual-fallback-response",
+                    /*total_tokens*/ 80,
+                ),
+            ]),
+        ],
     )
     .await;
 
-    let compact_mock = responses::mount_compact_json_once(
-        harness.server(),
-        serde_json::json!({ "output": "invalid compact payload shape" }),
-    )
-    .await;
+    let compact_mocks = [
+        responses::mount_compact_json_once(
+            harness.server(),
+            invalid_remote_compact_output_payload(),
+        )
+        .await,
+        responses::mount_compact_json_once(
+            harness.server(),
+            invalid_remote_context_compaction_payload(),
+        )
+        .await,
+        responses::mount_compact_json_once(
+            harness.server(),
+            invalid_remote_failure_message_payload(),
+        )
+        .await,
+    ];
 
     codex
         .submit(Op::UserInput {
@@ -2305,23 +2481,42 @@ async fn remote_manual_compact_failure_emits_task_error_event() -> Result<()> {
 
     codex.submit(Op::Compact).await?;
 
-    let error_message = wait_for_event_match(&codex, |event| match event {
-        EventMsg::Error(err) => Some(err.message.clone()),
-        _ => None,
-    })
-    .await;
-    assert!(
-        error_message.contains("Error running remote compact task"),
-        "expected remote compact task error prefix, got {error_message}"
-    );
-    assert!(
-        error_message.contains("invalid compact payload shape")
-            || error_message.contains("invalid type: string"),
-        "expected invalid compact payload details, got {error_message}"
-    );
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    let warnings = collect_warnings_until_turn_complete(&codex).await;
+    assert_remote_compact_fallback_warnings(&warnings);
 
-    assert_eq!(compact_mock.requests().len(), 1);
+    let compact_requests = compact_mocks
+        .iter()
+        .flat_map(core_test_support::responses::ResponseMock::requests)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        compact_requests.len(),
+        3,
+        "expected three remote compact attempts before local fallback"
+    );
+    assert!(
+        compact_requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses/compact"),
+        "expected all remote attempts to hit /v1/responses/compact"
+    );
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        2,
+        "expected initial turn and local fallback compact request"
+    );
+    let local_fallback_compact_request = &response_requests[1];
+    assert_local_fallback_compact_request_is_clean(local_fallback_compact_request, &warnings);
+    let local_fallback_compact_body = local_fallback_compact_request.body_json().to_string();
+    assert!(
+        local_fallback_compact_body.contains("manual remote compact"),
+        "expected fallback local compact request to retain pre-compaction user history"
+    );
+    assert!(
+        local_fallback_compact_body.contains("REMOTE_REPLY"),
+        "expected fallback local compact request to retain pre-compaction assistant history"
+    );
 
     Ok(())
 }

@@ -13,7 +13,6 @@ use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
-use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
@@ -35,6 +34,7 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::plugins::build_plugin_injections;
+use crate::remote_compact_fallback::run_v1_remote_first_auto_compact;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
@@ -865,9 +865,9 @@ async fn run_auto_compact(
             "remote",
             /*manual*/ false,
         );
-        run_inline_remote_auto_compact_task(
-            Arc::clone(sess),
-            Arc::clone(turn_context),
+        run_v1_remote_first_auto_compact(
+            sess,
+            turn_context,
             initial_context_injection,
             reason,
             phase,

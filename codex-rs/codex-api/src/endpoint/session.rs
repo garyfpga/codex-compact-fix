@@ -7,6 +7,7 @@ use codex_client::Request;
 use codex_client::RequestBody;
 use codex_client::RequestTelemetry;
 use codex_client::Response;
+use codex_client::RetryPolicy;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
 use http::HeaderMap;
@@ -70,18 +71,41 @@ impl<T: HttpTransport> EndpointSession<T> {
             .await
     }
 
-    #[instrument(
-        name = "endpoint_session.execute_with",
-        level = "info",
-        skip_all,
-        fields(http.method = %method, api.path = path)
-    )]
     pub(crate) async fn execute_with<C>(
         &self,
         method: Method,
         path: &str,
         extra_headers: HeaderMap,
         body: Option<Value>,
+        configure: C,
+    ) -> Result<Response, ApiError>
+    where
+        C: Fn(&mut Request),
+    {
+        self.execute_with_policy(
+            method,
+            path,
+            extra_headers,
+            body,
+            self.provider.retry.to_policy(),
+            configure,
+        )
+        .await
+    }
+
+    #[instrument(
+        name = "endpoint_session.execute_with",
+        level = "info",
+        skip_all,
+        fields(http.method = %method, api.path = path)
+    )]
+    pub(crate) async fn execute_with_policy<C>(
+        &self,
+        method: Method,
+        path: &str,
+        extra_headers: HeaderMap,
+        body: Option<Value>,
+        retry_policy: RetryPolicy,
         configure: C,
     ) -> Result<Response, ApiError>
     where
@@ -94,7 +118,7 @@ impl<T: HttpTransport> EndpointSession<T> {
         };
 
         let response = run_with_request_telemetry(
-            self.provider.retry.to_policy(),
+            retry_policy,
             self.request_telemetry.clone(),
             make_request,
             |req| {

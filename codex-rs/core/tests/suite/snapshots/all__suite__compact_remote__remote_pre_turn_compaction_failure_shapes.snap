@@ -1,11 +1,25 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "format_labeled_requests_snapshot(\"Remote pre-turn auto-compaction parse failure: compaction request excludes the incoming user message and the turn stops.\",\n&[(\"Remote Compaction Request (Incoming User Excluded)\",\n&first_compact_mock.single_request()),])"
+expression: "format_labeled_requests_snapshot(\"Remote pre-turn auto-compaction parse failure: three remote attempts fail, local compact runs without polluted failure history, and the turn continues.\",\n&[(\"Remote Compaction Request (Incoming User Excluded)\",\n&compact_requests[0]),\n(\"Local Fallback Compaction Request\", local_fallback_compact_request),\n(\"Post-Fallback Sampling Request\", &response_requests[2]),])"
 ---
-Scenario: Remote pre-turn auto-compaction parse failure: compaction request excludes the incoming user message and the turn stops.
+Scenario: Remote pre-turn auto-compaction parse failure: three remote attempts fail, local compact runs without polluted failure history, and the turn continues.
 
 ## Remote Compaction Request (Incoming User Excluded)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:turn that exceeds token threshold
 03:message/assistant:initial turn complete
+
+## Local Fallback Compaction Request
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:turn that exceeds token threshold
+03:message/assistant:initial turn complete
+04:message/user:<SUMMARIZATION_PROMPT>
+
+## Post-Fallback Sampling Request
+00:message/user:turn that exceeds token threshold
+01:message/user:<COMPACTION_SUMMARY>\nLOCAL_FALLBACK_SUMMARY
+02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:turn that triggers auto compact

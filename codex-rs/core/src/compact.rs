@@ -63,6 +63,12 @@ pub(crate) enum InitialContextInjection {
     DoNotInject,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PreCompactHookPolicy {
+    Run,
+    SkipAlreadyRan,
+}
+
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.supports_remote_compaction()
 }
@@ -73,6 +79,25 @@ pub(crate) async fn run_inline_auto_compact_task(
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
+) -> CodexResult<()> {
+    run_inline_auto_compact_task_with_pre_hook_policy(
+        sess,
+        turn_context,
+        initial_context_injection,
+        reason,
+        phase,
+        PreCompactHookPolicy::Run,
+    )
+    .await
+}
+
+pub(crate) async fn run_inline_auto_compact_task_with_pre_hook_policy(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    initial_context_injection: InitialContextInjection,
+    reason: CompactionReason,
+    phase: CompactionPhase,
+    pre_compact_hook_policy: PreCompactHookPolicy,
 ) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
@@ -85,10 +110,13 @@ pub(crate) async fn run_inline_auto_compact_task(
         sess,
         turn_context,
         input,
-        initial_context_injection,
-        CompactionTrigger::Auto,
-        reason,
-        phase,
+        CompactTaskRunSettings {
+            initial_context_injection,
+            trigger: CompactionTrigger::Auto,
+            reason,
+            phase,
+            pre_compact_hook_policy,
+        },
     )
     .await?;
     Ok(())
@@ -99,6 +127,33 @@ pub(crate) async fn run_compact_task(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
 ) -> CodexResult<()> {
+    send_compact_turn_started(&sess, &turn_context).await;
+    run_compact_task_after_turn_started(sess, turn_context, input, PreCompactHookPolicy::Run).await
+}
+
+pub(crate) async fn run_compact_task_after_turn_started(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    input: Vec<UserInput>,
+    pre_compact_hook_policy: PreCompactHookPolicy,
+) -> CodexResult<()> {
+    run_compact_task_inner(
+        sess,
+        turn_context,
+        input,
+        CompactTaskRunSettings {
+            initial_context_injection: InitialContextInjection::DoNotInject,
+            trigger: CompactionTrigger::Manual,
+            reason: CompactionReason::UserRequested,
+            phase: CompactionPhase::StandaloneTurn,
+            pre_compact_hook_policy,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn send_compact_turn_started(sess: &Session, turn_context: &TurnContext) {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
         trace_id: turn_context.trace_id.clone(),
@@ -106,68 +161,71 @@ pub(crate) async fn run_compact_task(
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
-    sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(
-        sess.clone(),
-        turn_context,
-        input,
-        InitialContextInjection::DoNotInject,
-        CompactionTrigger::Manual,
-        CompactionReason::UserRequested,
-        CompactionPhase::StandaloneTurn,
-    )
-    .await?;
-    Ok(())
+    sess.send_event(turn_context, start_event).await;
+}
+
+struct CompactTaskRunSettings {
+    initial_context_injection: InitialContextInjection,
+    trigger: CompactionTrigger,
+    reason: CompactionReason,
+    phase: CompactionPhase,
+    pre_compact_hook_policy: PreCompactHookPolicy,
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-    initial_context_injection: InitialContextInjection,
-    trigger: CompactionTrigger,
-    reason: CompactionReason,
-    phase: CompactionPhase,
+    settings: CompactTaskRunSettings,
 ) -> CodexResult<()> {
-    let compaction_metadata =
-        CompactionTurnMetadata::new(trigger, reason, CompactionImplementation::Responses, phase);
+    let compaction_metadata = CompactionTurnMetadata::new(
+        settings.trigger,
+        settings.reason,
+        CompactionImplementation::Responses,
+        settings.phase,
+    );
     let attempt = CompactionAnalyticsAttempt::begin(
         sess.as_ref(),
         turn_context.as_ref(),
-        trigger,
-        reason,
+        settings.trigger,
+        settings.reason,
         CompactionImplementation::Responses,
-        phase,
+        settings.phase,
     )
     .await;
-    let pre_compact_outcome = run_pre_compact_hooks(&sess, &turn_context, trigger).await;
-    match pre_compact_outcome {
-        PreCompactHookOutcome::Continue => {}
-        PreCompactHookOutcome::Stopped { reason } => {
-            let error = reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
-            attempt
-                .track(
-                    sess.as_ref(),
-                    CompactionStatus::Interrupted,
-                    Some(error),
-                    /*active_context_tokens_before*/ None,
-                )
-                .await;
-            return Err(CodexErr::TurnAborted);
+    if matches!(settings.pre_compact_hook_policy, PreCompactHookPolicy::Run) {
+        let pre_compact_outcome =
+            run_pre_compact_hooks(&sess, &turn_context, settings.trigger).await;
+        match pre_compact_outcome {
+            PreCompactHookOutcome::Continue => {}
+            PreCompactHookOutcome::Stopped { reason } => {
+                let error =
+                    reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
+                attempt
+                    .track(
+                        sess.as_ref(),
+                        CompactionStatus::Interrupted,
+                        Some(error),
+                        /*active_context_tokens_before*/ None,
+                    )
+                    .await;
+                return Err(CodexErr::TurnAborted);
+            }
         }
     }
     let result = run_compact_task_inner_impl(
         Arc::clone(&sess),
         Arc::clone(&turn_context),
         input,
-        initial_context_injection,
+        settings.initial_context_injection,
         compaction_metadata,
     )
     .await;
     let status = compaction_status_from_result(&result);
     let error = result.as_ref().err().map(ToString::to_string);
     if result.is_ok() {
-        let post_compact_outcome = run_post_compact_hooks(&sess, &turn_context, trigger).await;
+        let post_compact_outcome =
+            run_post_compact_hooks(&sess, &turn_context, settings.trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
             attempt
                 .track(

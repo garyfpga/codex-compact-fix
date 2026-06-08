@@ -60,10 +60,11 @@ Resolved tiers for this run from environment, with no current-request override a
 4. Compact endpoint retry/timeout contract:
    - Files: `codex-rs/codex-api/src/endpoint/session.rs`, `codex-rs/codex-api/src/endpoint/compact.rs`, and `codex-rs/core/src/client.rs`.
    - `EndpointSession` exposes `execute_with_policy(...)`, a request execution method that accepts an explicit `codex_client::RetryPolicy`. Existing `execute_with(...)` continues to call `execute_with_policy(...)` with `self.provider.retry.to_policy()`.
-   - `CompactClient` exposes `compact_input_with_policy(...)`, which accepts `request_timeout: Duration` and `retry_policy: codex_client::RetryPolicy`. Existing compact methods delegate to it with the provider default policy.
+   - `codex-rs/codex-api/src/lib.rs` re-exports `codex_client::RetryPolicy` as `codex_api::RetryPolicy` and `codex_client::RetryOn` as `codex_api::RetryOn` so `codex-core` can name the existing retry types without adding a new direct dependency.
+   - `CompactClient` exposes `compact_input_with_policy(...)`, which accepts `request_timeout: Duration` and `retry_policy: codex_api::RetryPolicy`. Existing compact methods delegate to it with the provider default policy.
    - `CompactConversationRequestSettings` in `codex-rs/core/src/client.rs` gains these exact fields:
      - `pub(crate) request_timeout: Duration`
-     - `pub(crate) retry_policy: codex_client::RetryPolicy`
+     - `pub(crate) retry_policy: codex_api::RetryPolicy`
    - V1 remote compaction sets `request_timeout` to `REMOTE_COMPACT_ATTEMPT_TIMEOUT` and sets `retry_policy.max_attempts` to `0`, with retry-on flags false or otherwise ineffective, so each visible V1 attempt maps to exactly one `/responses/compact` HTTP request.
    - Existing non-compact Responses, memories, images, and search endpoints keep their current provider retry and timeout behavior.
 
@@ -96,6 +97,7 @@ Resolved tiers for this run from environment, with no current-request override a
 
 | File | Owner task | Change type | Responsibility | Parallel safety notes |
 |------|------------|-------------|----------------|-----------------------|
+| `codex-rs/codex-api/src/lib.rs` | Task A: Compact endpoint retry controls | modify | Re-export `codex_client::RetryPolicy` and `codex_client::RetryOn` for use by `codex-core` without a new direct dependency. | Implied-scope omission correction after Task A blocker; parallel with Tasks B, C, and D because no other task edits this file. |
 | `codex-rs/codex-api/src/endpoint/session.rs` | Task A: Compact endpoint retry controls | modify | Add explicit retry-policy execution path while preserving existing default retry behavior. | Parallel with Tasks B, C, and D because no other task edits this file. |
 | `codex-rs/codex-api/src/endpoint/compact.rs` | Task A: Compact endpoint retry controls | modify | Add compact call variant accepting explicit timeout and retry policy. | Parallel with Tasks B, C, and D because no other task edits this file. |
 | `codex-rs/core/src/client.rs` | Task A: Compact endpoint retry controls | modify | Thread compact-specific timeout/retry controls through `CompactConversationRequestSettings` and V1 compact endpoint call. | Parallel with Tasks B, C, and D because no other task edits this file. |
@@ -159,7 +161,7 @@ attempt 3, max 180s -> warn on failure/timeout
 - **Goal:** Give `/responses/compact` an explicit compact-specific timeout and zero-hidden-retry call path so V1 remote compact can own exactly 3 visible attempts.
 - **Contract inputs:** Interface Contract entries 2, 4, and 7; approved design detail that each remote attempt is capped at 180 seconds and there are exactly 3 visible attempts total.
 - **Serialization required:** No. The Interface Contract defines the API shape Task B will call, and Task A owns all files it edits.
-- **Write scope:** `codex-rs/codex-api/src/endpoint/session.rs`, `codex-rs/codex-api/src/endpoint/compact.rs`, `codex-rs/core/src/client.rs`.
+- **Write scope:** `codex-rs/codex-api/src/lib.rs`, `codex-rs/codex-api/src/endpoint/session.rs`, `codex-rs/codex-api/src/endpoint/compact.rs`, `codex-rs/core/src/client.rs`.
 - **Parallel:** Yes, compatible with Tasks B, C, and D.
 - **Risk:** Medium because it touches shared API transport code, but the changes are localized and must preserve default behavior for existing callers.
 - **Model tier:** NORMAL, resolved to `model="gpt-5.4-mini"`, `reasoning_effort="xhigh"`.
@@ -167,12 +169,13 @@ attempt 3, max 180s -> warn on failure/timeout
 - **Outputs and file-level responsibilities:** A self-documenting compact request settings path that lets callers pass `REMOTE_COMPACT_ATTEMPT_TIMEOUT` and a retry policy equivalent to zero hidden retries; no behavior change for non-compact endpoints.
 - **Implementation steps:**
   - In `codex-rs/codex-api/src/endpoint/session.rs`, add `execute_with_policy(...)`, an execution helper that accepts an explicit `codex_client::RetryPolicy`. Keep `execute_with(...)` as a wrapper that passes `self.provider.retry.to_policy()`.
-  - In `codex-rs/codex-api/src/endpoint/compact.rs`, add `compact_input_with_policy(...)`, a compact method that accepts `request_timeout: Duration` and `retry_policy: codex_client::RetryPolicy`. Existing compact methods delegate to the new method with the provider default policy.
-  - In `codex-rs/core/src/client.rs`, add exact fields `request_timeout: Duration` and `retry_policy: codex_client::RetryPolicy` to `CompactConversationRequestSettings` so V1 remote compact can set request timeout and retry policy without positional booleans or ambiguous `Option`s.
+  - In `codex-rs/codex-api/src/lib.rs`, re-export `codex_client::RetryPolicy` as `codex_api::RetryPolicy` and `codex_client::RetryOn` as `codex_api::RetryOn`.
+  - In `codex-rs/codex-api/src/endpoint/compact.rs`, add `compact_input_with_policy(...)`, a compact method that accepts `request_timeout: Duration` and `retry_policy: codex_api::RetryPolicy`. Existing compact methods delegate to the new method with the provider default policy.
+  - In `codex-rs/core/src/client.rs`, add exact fields `request_timeout: Duration` and `retry_policy: codex_api::RetryPolicy` to `CompactConversationRequestSettings` so V1 remote compact can set request timeout and retry policy without positional booleans or ambiguous `Option`s.
   - Replace the current `COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER` behavior for remote compact callers with the explicit compact timeout supplied by settings. Remove the multiplier constant if it becomes unused.
   - Ensure `run_with_request_telemetry` still wraps the compact request so telemetry is preserved.
 - **Verification commands:**
-  - `timeout 30s git diff --check -- codex-rs/codex-api/src/endpoint/session.rs codex-rs/codex-api/src/endpoint/compact.rs codex-rs/core/src/client.rs` from repo root; expected result: no whitespace errors. Do not run mutating repo-wide commands from the worker.
+  - `timeout 30s git diff --check -- codex-rs/codex-api/src/lib.rs codex-rs/codex-api/src/endpoint/session.rs codex-rs/codex-api/src/endpoint/compact.rs codex-rs/core/src/client.rs` from repo root; expected result: no whitespace errors. Do not run mutating repo-wide commands from the worker.
 - **Completion report requirements:** Report changed files, the exact compact retry API added, whether any non-compact caller changed behavior, commands run, command results, and unresolved risks.
 
 ### Task B: Side-effect-light remote helpers
