@@ -9836,6 +9836,162 @@ smart_approvals = true
     Ok(())
 }
 
+async fn load_config_for_remote_compact_test(config_toml: Option<&str>) -> std::io::Result<Config> {
+    let codex_home = TempDir::new()?;
+    if let Some(config_toml) = config_toml {
+        std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), config_toml)?;
+    }
+
+    ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+}
+
+async fn assert_remote_compact_config_error(
+    config_toml: &str,
+    expected_message: &str,
+) -> std::io::Result<()> {
+    let err = load_config_for_remote_compact_test(Some(config_toml))
+        .await
+        .expect_err("remote_compact value should be rejected");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(err.to_string(), expected_message);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_compact_config_uses_defaults_when_absent() -> std::io::Result<()> {
+    let config = load_config_for_remote_compact_test(None).await?;
+    assert_eq!(config.remote_compact, RemoteCompactConfig::default());
+
+    let config = load_config_for_remote_compact_test(Some(
+        r#"[remote_compact]
+max_attempts = 5
+"#,
+    ))
+    .await?;
+    assert_eq!(
+        config.remote_compact,
+        RemoteCompactConfig {
+            max_attempts: 5,
+            ..RemoteCompactConfig::default()
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_compact_config_loads_overrides() -> std::io::Result<()> {
+    let config = load_config_for_remote_compact_test(Some(
+        r#"[remote_compact]
+max_attempts = 7
+attempt_timeout_sec = 42
+tcp_keepalive_interval_ms = 2500
+"#,
+    ))
+    .await?;
+
+    assert_eq!(
+        config.remote_compact,
+        RemoteCompactConfig {
+            max_attempts: 7,
+            attempt_timeout: Duration::from_secs(42),
+            tcp_keepalive_interval: Duration::from_millis(2500),
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_compact_config_rejects_zero_values() -> std::io::Result<()> {
+    for (config_toml, expected_message) in [
+        (
+            r#"[remote_compact]
+max_attempts = 0
+"#,
+            "remote_compact.max_attempts must be at least 1",
+        ),
+        (
+            r#"[remote_compact]
+attempt_timeout_sec = 0
+"#,
+            "remote_compact.attempt_timeout_sec must be at least 1",
+        ),
+        (
+            r#"[remote_compact]
+tcp_keepalive_interval_ms = 0
+"#,
+            "remote_compact.tcp_keepalive_interval_ms must be at least 1",
+        ),
+    ] {
+        assert_remote_compact_config_error(config_toml, expected_message).await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_compact_config_rejects_negative_values() -> std::io::Result<()> {
+    for (config_toml, expected_message) in [
+        (
+            r#"[remote_compact]
+max_attempts = -1
+"#,
+            "remote_compact.max_attempts must be at least 1",
+        ),
+        (
+            r#"[remote_compact]
+attempt_timeout_sec = -1
+"#,
+            "remote_compact.attempt_timeout_sec must be at least 1",
+        ),
+        (
+            r#"[remote_compact]
+tcp_keepalive_interval_ms = -1
+"#,
+            "remote_compact.tcp_keepalive_interval_ms must be at least 1",
+        ),
+    ] {
+        assert_remote_compact_config_error(config_toml, expected_message).await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_compact_config_rejects_too_large_values() -> std::io::Result<()> {
+    for (config_toml, expected_message) in [
+        (
+            r#"[remote_compact]
+max_attempts = 21
+"#,
+            "remote_compact.max_attempts must be at most 20",
+        ),
+        (
+            r#"[remote_compact]
+attempt_timeout_sec = 3601
+"#,
+            "remote_compact.attempt_timeout_sec must be at most 3600",
+        ),
+        (
+            r#"[remote_compact]
+tcp_keepalive_interval_ms = 60001
+"#,
+            "remote_compact.tcp_keepalive_interval_ms must be at most 60000",
+        ),
+    ] {
+        assert_remote_compact_config_error(config_toml, expected_message).await?;
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;

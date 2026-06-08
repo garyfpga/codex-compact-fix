@@ -20,6 +20,7 @@ use crate::types::Notice;
 use crate::types::OAuthCredentialsStoreMode;
 use crate::types::OtelConfigToml;
 use crate::types::PluginConfig;
+use crate::types::RemoteCompactConfigToml;
 use crate::types::SandboxWorkspaceWrite;
 use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::SkillsConfig;
@@ -227,6 +228,10 @@ pub struct ConfigToml {
 
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
+
+    /// V1 remote compaction settings.
+    #[serde(default)]
+    pub remote_compact: Option<RemoteCompactConfigToml>,
 
     /// When set, restricts ChatGPT login to one or more workspace identifiers.
     #[serde(default)]

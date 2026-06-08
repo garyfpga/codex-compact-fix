@@ -68,6 +68,7 @@ use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
 use codex_login::UnauthorizedRecovery;
 use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::build_reqwest_client_with_tcp_keepalive_interval;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
 
@@ -157,6 +158,7 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
 
 pub(crate) struct CompactConversationRequestSettings {
     pub(crate) request_timeout: Duration,
+    pub(crate) tcp_keepalive_interval: Duration,
     pub(crate) retry_policy: codex_api::RetryPolicy,
     pub(crate) effort: Option<ReasoningEffortConfig>,
     pub(crate) summary: ReasoningSummaryConfig,
@@ -469,7 +471,9 @@ impl ModelClient {
             return Ok(Vec::new());
         }
         let client_setup = self.current_client_setup().await?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
+        let transport = ReqwestTransport::new(build_reqwest_client_with_tcp_keepalive_interval(
+            settings.tcp_keepalive_interval,
+        ));
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
             AuthRequestTelemetryContext::new(

@@ -16,6 +16,7 @@ use reqwest::header::USER_AGENT;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::time::Duration;
 
 /// Set this to add a suffix to the User-Agent string.
 ///
@@ -203,7 +204,7 @@ pub fn create_client() -> CodexHttpClient {
 pub fn build_reqwest_client() -> reqwest::Client {
     try_build_reqwest_client().unwrap_or_else(|error| {
         tracing::warn!(error = %error, "failed to build default reqwest client");
-        with_chatgpt_cloudflare_cookie_store(reqwest::Client::builder())
+        fallback_reqwest_client_builder()
             .build()
             .unwrap_or_else(|fallback_error| {
                 tracing::warn!(
@@ -215,18 +216,60 @@ pub fn build_reqwest_client() -> reqwest::Client {
     })
 }
 
+/// Builds a reqwest client with Codex defaults and compact-specific TCP keepalive settings.
+///
+/// This preserves the default Codex headers, sandbox proxy policy, ChatGPT Cloudflare cookie
+/// store, and custom CA handling used by [`build_reqwest_client`], while applying the configured
+/// TCP keepalive interval for the compact transport.
+pub fn build_reqwest_client_with_tcp_keepalive_interval(
+    tcp_keepalive_interval: Duration,
+) -> reqwest::Client {
+    let builder =
+        apply_tcp_keepalive_interval(default_reqwest_client_builder(), tcp_keepalive_interval);
+    build_reqwest_client_with_custom_ca(builder).unwrap_or_else(|error| {
+        tracing::warn!(
+            error = %error,
+            "failed to build default reqwest client with TCP keepalive"
+        );
+        apply_tcp_keepalive_interval(fallback_reqwest_client_builder(), tcp_keepalive_interval)
+            .build()
+            .unwrap_or_else(|fallback_error| {
+                tracing::warn!(
+                    error = %fallback_error,
+                    "failed to build fallback reqwest client with ChatGPT Cloudflare cookie store and TCP keepalive"
+                );
+                reqwest::Client::new()
+            })
+    })
+}
+
 /// Tries to build the default reqwest client used for ordinary Codex HTTP traffic.
 ///
 /// Callers that need a structured CA-loading failure instead of the legacy logged fallback can use
 /// this method directly.
 pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransportError> {
+    build_reqwest_client_with_custom_ca(default_reqwest_client_builder())
+}
+
+fn default_reqwest_client_builder() -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder().default_headers(default_headers());
     if is_sandboxed() {
         builder = builder.no_proxy();
     }
-    builder = with_chatgpt_cloudflare_cookie_store(builder);
+    with_chatgpt_cloudflare_cookie_store(builder)
+}
 
-    build_reqwest_client_with_custom_ca(builder)
+fn fallback_reqwest_client_builder() -> reqwest::ClientBuilder {
+    with_chatgpt_cloudflare_cookie_store(reqwest::Client::builder())
+}
+
+fn apply_tcp_keepalive_interval(
+    builder: reqwest::ClientBuilder,
+    tcp_keepalive_interval: Duration,
+) -> reqwest::ClientBuilder {
+    builder
+        .tcp_keepalive(Some(tcp_keepalive_interval))
+        .tcp_keepalive_interval(Some(tcp_keepalive_interval))
 }
 
 pub fn default_headers() -> HeaderMap {

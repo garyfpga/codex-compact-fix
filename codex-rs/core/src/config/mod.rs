@@ -193,6 +193,15 @@ pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usiz
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
+const DEFAULT_REMOTE_COMPACT_MAX_ATTEMPTS: i64 = 3;
+const DEFAULT_REMOTE_COMPACT_ATTEMPT_TIMEOUT_SEC: i64 = 180;
+const DEFAULT_REMOTE_COMPACT_TCP_KEEPALIVE_INTERVAL_MS: i64 = 1000;
+const MIN_REMOTE_COMPACT_MAX_ATTEMPTS: i64 = 1;
+const MAX_REMOTE_COMPACT_MAX_ATTEMPTS: i64 = 20;
+const MIN_REMOTE_COMPACT_ATTEMPT_TIMEOUT_SEC: i64 = 1;
+const MAX_REMOTE_COMPACT_ATTEMPT_TIMEOUT_SEC: i64 = 3600;
+const MIN_REMOTE_COMPACT_TCP_KEEPALIVE_INTERVAL_MS: i64 = 1;
+const MAX_REMOTE_COMPACT_TCP_KEEPALIVE_INTERVAL_MS: i64 = 60000;
 const DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT: &str = r#"You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 
 At the start of your turn, you are the active agent.
@@ -679,6 +688,9 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
+    /// Effective settings for V1 remote compaction.
+    pub remote_compact: RemoteCompactConfig,
+
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
@@ -1074,6 +1086,27 @@ impl Default for MultiAgentV2Config {
             tool_namespace: None,
             hide_spawn_agent_metadata: true,
             non_code_mode_only: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoteCompactConfig {
+    pub max_attempts: u64,
+    pub attempt_timeout: std::time::Duration,
+    pub tcp_keepalive_interval: std::time::Duration,
+}
+
+impl Default for RemoteCompactConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: DEFAULT_REMOTE_COMPACT_MAX_ATTEMPTS as u64,
+            attempt_timeout: std::time::Duration::from_secs(
+                DEFAULT_REMOTE_COMPACT_ATTEMPT_TIMEOUT_SEC as u64,
+            ),
+            tcp_keepalive_interval: std::time::Duration::from_millis(
+                DEFAULT_REMOTE_COMPACT_TCP_KEEPALIVE_INTERVAL_MS as u64,
+            ),
         }
     }
 }
@@ -2369,6 +2402,60 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     }
 }
 
+fn resolve_remote_compact_config(config_toml: &ConfigToml) -> std::io::Result<RemoteCompactConfig> {
+    let base = config_toml.remote_compact.as_ref();
+    let max_attempts = validate_remote_compact_value(
+        "remote_compact.max_attempts",
+        base.and_then(|config| config.max_attempts),
+        DEFAULT_REMOTE_COMPACT_MAX_ATTEMPTS,
+        MIN_REMOTE_COMPACT_MAX_ATTEMPTS,
+        MAX_REMOTE_COMPACT_MAX_ATTEMPTS,
+    )?;
+    let attempt_timeout_sec = validate_remote_compact_value(
+        "remote_compact.attempt_timeout_sec",
+        base.and_then(|config| config.attempt_timeout_sec),
+        DEFAULT_REMOTE_COMPACT_ATTEMPT_TIMEOUT_SEC,
+        MIN_REMOTE_COMPACT_ATTEMPT_TIMEOUT_SEC,
+        MAX_REMOTE_COMPACT_ATTEMPT_TIMEOUT_SEC,
+    )?;
+    let tcp_keepalive_interval_ms = validate_remote_compact_value(
+        "remote_compact.tcp_keepalive_interval_ms",
+        base.and_then(|config| config.tcp_keepalive_interval_ms),
+        DEFAULT_REMOTE_COMPACT_TCP_KEEPALIVE_INTERVAL_MS,
+        MIN_REMOTE_COMPACT_TCP_KEEPALIVE_INTERVAL_MS,
+        MAX_REMOTE_COMPACT_TCP_KEEPALIVE_INTERVAL_MS,
+    )?;
+
+    Ok(RemoteCompactConfig {
+        max_attempts: max_attempts as u64,
+        attempt_timeout: std::time::Duration::from_secs(attempt_timeout_sec as u64),
+        tcp_keepalive_interval: std::time::Duration::from_millis(tcp_keepalive_interval_ms as u64),
+    })
+}
+
+fn validate_remote_compact_value(
+    label: &str,
+    value: Option<i64>,
+    default: i64,
+    min: i64,
+    max: i64,
+) -> std::io::Result<i64> {
+    let value = value.unwrap_or(default);
+    if value < min {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{label} must be at least {min}"),
+        ));
+    }
+    if value > max {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{label} must be at most {max}"),
+        ));
+    }
+    Ok(value)
+}
+
 fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalResizeReflowConfig {
     let Some(tui) = config_toml.tui.as_ref() else {
         return TerminalResizeReflowConfig::default();
@@ -3038,6 +3125,7 @@ impl Config {
             resolve_experimental_request_user_input_enabled(&cfg);
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
+        let remote_compact = resolve_remote_compact_config(&cfg)?;
         let apps_mcp_path_override = if features.enabled(Feature::AppsMcpPathOverride) {
             let base = apps_mcp_path_override_toml_config(cfg.features.as_ref());
             base.and_then(|config| config.path.as_ref())
@@ -3459,6 +3547,7 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
+            remote_compact,
             include_permissions_instructions,
             include_apps_instructions,
             include_collaboration_mode_instructions,

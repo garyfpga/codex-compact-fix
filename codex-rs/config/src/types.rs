@@ -200,6 +200,23 @@ pub struct FeedbackConfigToml {
     pub enabled: Option<bool>,
 }
 
+/// Settings for the V1 `/responses/compact` remote compaction path.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RemoteCompactConfigToml {
+    /// Number of visible remote compact attempts before falling back locally.
+    #[schemars(range(min = 1, max = 20))]
+    pub max_attempts: Option<i64>,
+
+    /// Per-attempt request timeout, in seconds.
+    #[schemars(range(min = 1, max = 3600))]
+    pub attempt_timeout_sec: Option<i64>,
+
+    /// TCP keepalive interval for V1 remote compact requests, in milliseconds.
+    #[schemars(range(min = 1, max = 60000))]
+    pub tcp_keepalive_interval_ms: Option<i64>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolSuggestDiscoverableType {

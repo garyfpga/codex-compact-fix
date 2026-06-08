@@ -140,6 +140,18 @@ fn summary_with_prefix(summary: &str) -> String {
     format!("{SUMMARY_PREFIX}\n{summary}")
 }
 
+fn remote_compact_config(
+    max_attempts: u64,
+    attempt_timeout_sec: u64,
+    tcp_keepalive_interval_ms: u64,
+) -> codex_core::config::RemoteCompactConfig {
+    codex_core::config::RemoteCompactConfig {
+        max_attempts,
+        attempt_timeout: Duration::from_secs(attempt_timeout_sec),
+        tcp_keepalive_interval: Duration::from_millis(tcp_keepalive_interval_ms),
+    }
+}
+
 fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
         .strip_capability_instructions()
@@ -304,15 +316,12 @@ async fn collect_warnings_until_turn_complete(codex: &codex_core::CodexThread) -
 }
 
 fn assert_remote_compact_fallback_warnings(warnings: &[String]) {
+    assert_remote_compact_fallback_warning_count(warnings, 3);
+
     let attempt_warnings = warnings
         .iter()
         .filter(|message| message.starts_with("Remote compact attempt "))
         .collect::<Vec<_>>();
-    assert_eq!(
-        attempt_warnings.len(),
-        3,
-        "expected one visible warning for each remote compact attempt, got {warnings:?}"
-    );
     for (attempt_number, message) in (1..=3).zip(attempt_warnings) {
         let expected_attempt = format!("Remote compact attempt {attempt_number}/3 ");
         assert!(
@@ -321,12 +330,26 @@ fn assert_remote_compact_fallback_warnings(warnings: &[String]) {
             "expected visible warning for attempt {attempt_number}/3, got {message}"
         );
     }
+}
+
+fn assert_remote_compact_fallback_warning_count(warnings: &[String], total_attempts: usize) {
+    let attempt_warnings = warnings
+        .iter()
+        .filter(|message| message.starts_with("Remote compact attempt "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        attempt_warnings.len(),
+        total_attempts,
+        "expected one visible warning for each remote compact attempt, got {warnings:?}"
+    );
     assert_eq!(
         warnings
             .iter()
             .filter(|message| {
                 message.as_str()
-                    == "Remote compact failed after 3 attempts; falling back to local compact."
+                    == format!(
+                        "Remote compact failed after {total_attempts} attempts; falling back to local compact."
+                    )
             })
             .count(),
         1,
@@ -2420,7 +2443,11 @@ async fn remote_manual_compact_failure_falls_back_to_local_compact() -> Result<(
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
-        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.remote_compact = remote_compact_config(2, 180, 1000);
+            }),
     )
     .await?;
     let codex = harness.test().codex.clone();
@@ -2457,11 +2484,6 @@ async fn remote_manual_compact_failure_falls_back_to_local_compact() -> Result<(
             invalid_remote_context_compaction_payload(),
         )
         .await,
-        responses::mount_compact_json_once(
-            harness.server(),
-            invalid_remote_failure_message_payload(),
-        )
-        .await,
     ];
 
     codex
@@ -2482,7 +2504,7 @@ async fn remote_manual_compact_failure_falls_back_to_local_compact() -> Result<(
     codex.submit(Op::Compact).await?;
 
     let warnings = collect_warnings_until_turn_complete(&codex).await;
-    assert_remote_compact_fallback_warnings(&warnings);
+    assert_remote_compact_fallback_warning_count(&warnings, 2);
 
     let compact_requests = compact_mocks
         .iter()
@@ -2490,8 +2512,8 @@ async fn remote_manual_compact_failure_falls_back_to_local_compact() -> Result<(
         .collect::<Vec<_>>();
     assert_eq!(
         compact_requests.len(),
-        3,
-        "expected three remote compact attempts before local fallback"
+        2,
+        "expected two remote compact attempts before local fallback"
     );
     assert!(
         compact_requests
@@ -2515,6 +2537,264 @@ async fn remote_manual_compact_failure_falls_back_to_local_compact() -> Result<(
     );
     assert!(
         local_fallback_compact_body.contains("REMOTE_REPLY"),
+        "expected fallback local compact request to retain pre-compaction assistant history"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_timeout_warning_mentions_configured_attempt_timeout() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.remote_compact = remote_compact_config(2, 2, 1000);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_TIMEOUT_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message(
+                    "local-timeout-fallback-summary",
+                    "LOCAL_MANUAL_TIMEOUT_FALLBACK_SUMMARY",
+                ),
+                responses::ev_completed_with_tokens(
+                    "local-timeout-fallback-response",
+                    /*total_tokens*/ 80,
+                ),
+            ]),
+        ],
+    )
+    .await;
+
+    let compact_mocks = [
+        responses::mount_compact_response_once(
+            harness.server(),
+            ResponseTemplate::new(200)
+                .set_body_string("late timeout response 1")
+                .set_delay(Duration::from_secs(5)),
+        )
+        .await,
+        responses::mount_compact_response_once(
+            harness.server(),
+            ResponseTemplate::new(200)
+                .set_body_string("late timeout response 2")
+                .set_delay(Duration::from_secs(5)),
+        )
+        .await,
+    ];
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "manual remote compact timeout".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await?;
+
+    let warnings = collect_warnings_until_turn_complete(&codex).await;
+    assert_remote_compact_fallback_warning_count(&warnings, 2);
+
+    let attempt_warnings = warnings
+        .iter()
+        .filter(|message| message.starts_with("Remote compact attempt "))
+        .collect::<Vec<_>>();
+    assert_eq!(attempt_warnings.len(), 2, "expected two timeout warnings");
+    assert_eq!(
+        attempt_warnings[0].as_str(),
+        "Remote compact attempt 1/2 timed out after 2s; retrying remote compact.",
+        "expected the first timeout warning to use the configured attempt timeout, got {warnings:?}"
+    );
+    assert_eq!(
+        attempt_warnings[1].as_str(),
+        "Remote compact attempt 2/2 timed out after 2s.",
+        "expected the final timeout warning to use the configured attempt timeout, got {warnings:?}"
+    );
+
+    let compact_requests = compact_mocks
+        .iter()
+        .flat_map(core_test_support::responses::ResponseMock::requests)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        compact_requests.len(),
+        2,
+        "expected two remote compact attempts before local fallback"
+    );
+    assert!(
+        compact_requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses/compact"),
+        "expected all remote attempts to hit /v1/responses/compact"
+    );
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        2,
+        "expected initial turn and local fallback compact request"
+    );
+    let local_fallback_compact_request = &response_requests[1];
+    assert_local_fallback_compact_request_is_clean(local_fallback_compact_request, &warnings);
+    let local_fallback_compact_body = local_fallback_compact_request.body_json().to_string();
+    assert!(
+        local_fallback_compact_body.contains("manual remote compact timeout"),
+        "expected fallback local compact request to retain pre-compaction user history"
+    );
+    assert!(
+        local_fallback_compact_body.contains("REMOTE_TIMEOUT_REPLY"),
+        "expected fallback local compact request to retain pre-compaction assistant history"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_unexpected_http_warning_includes_cf_ray() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.remote_compact = remote_compact_config(2, 180, 1000);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_UNEXPECTED_HTTP_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message(
+                    "local-unexpected-http-fallback-summary",
+                    "LOCAL_MANUAL_UNEXPECTED_HTTP_FALLBACK_SUMMARY",
+                ),
+                responses::ev_completed_with_tokens(
+                    "local-unexpected-http-fallback-response",
+                    /*total_tokens*/ 80,
+                ),
+            ]),
+        ],
+    )
+    .await;
+
+    let compact_mocks = [
+        responses::mount_compact_response_once(
+            harness.server(),
+            ResponseTemplate::new(503)
+                .insert_header("cf-ray", "ray-bot-check")
+                .set_body_string("bot-check interstitial"),
+        )
+        .await,
+        responses::mount_compact_response_once(
+            harness.server(),
+            ResponseTemplate::new(503)
+                .insert_header("cf-ray", "ray-bot-check")
+                .set_body_string("bot-check interstitial"),
+        )
+        .await,
+    ];
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "manual remote compact unexpected response".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await?;
+
+    let warnings = collect_warnings_until_turn_complete(&codex).await;
+    assert_remote_compact_fallback_warning_count(&warnings, 2);
+
+    let unexpected_http_warnings = warnings
+        .iter()
+        .filter(|message| message.contains("got unexpected HTTP response"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unexpected_http_warnings.len(),
+        2,
+        "expected one unexpected HTTP warning for each remote compact attempt, got {warnings:?}"
+    );
+    for message in unexpected_http_warnings {
+        assert!(
+            message.starts_with("Remote compact attempt "),
+            "expected unexpected HTTP warning to use the categorized prefix, got {message}"
+        );
+        assert!(
+            message.contains("unexpected status 503: bot-check interstitial"),
+            "expected unexpected HTTP warning to include a bounded response body and status, got {message}"
+        );
+        assert!(
+            message.contains("cf-ray: ray-bot-check"),
+            "expected unexpected HTTP warning to include the mocked cf-ray header, got {message}"
+        );
+    }
+
+    let compact_requests = compact_mocks
+        .iter()
+        .flat_map(core_test_support::responses::ResponseMock::requests)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        compact_requests.len(),
+        2,
+        "expected two remote compact attempts before local fallback"
+    );
+    assert!(
+        compact_requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses/compact"),
+        "expected all remote attempts to hit /v1/responses/compact"
+    );
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        2,
+        "expected initial turn and local fallback compact request"
+    );
+    let local_fallback_compact_request = &response_requests[1];
+    assert_local_fallback_compact_request_is_clean(local_fallback_compact_request, &warnings);
+    let local_fallback_compact_body = local_fallback_compact_request.body_json().to_string();
+    assert!(
+        local_fallback_compact_body.contains("manual remote compact unexpected response"),
+        "expected fallback local compact request to retain pre-compaction user history"
+    );
+    assert!(
+        local_fallback_compact_body.contains("REMOTE_UNEXPECTED_HTTP_REPLY"),
         "expected fallback local compact request to retain pre-compaction assistant history"
     );
 

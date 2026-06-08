@@ -2,6 +2,7 @@ use super::sanitize_user_agent;
 use super::*;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
 
 #[test]
 fn test_get_codex_user_agent() {
@@ -9,6 +10,11 @@ fn test_get_codex_user_agent() {
     let originator = originator().value;
     let prefix = format!("{originator}/");
     assert!(user_agent.starts_with(&prefix));
+}
+
+#[test]
+fn build_reqwest_client_with_tcp_keepalive_interval_constructs() {
+    let _client = build_reqwest_client_with_tcp_keepalive_interval(Duration::from_millis(1000));
 }
 
 #[test]

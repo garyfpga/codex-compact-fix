@@ -2530,6 +2530,34 @@
         }
       ]
     },
+    "RemoteCompactConfigToml": {
+      "additionalProperties": false,
+      "description": "Settings for the V1 `/responses/compact` remote compaction path.",
+      "properties": {
+        "attempt_timeout_sec": {
+          "description": "Per-attempt request timeout, in seconds.",
+          "format": "int64",
+          "maximum": 3600.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "max_attempts": {
+          "description": "Number of visible remote compact attempts before falling back locally.",
+          "format": "int64",
+          "maximum": 20.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "tcp_keepalive_interval_ms": {
+          "description": "TCP keepalive interval for V1 remote compact requests, in milliseconds.",
+          "format": "int64",
+          "maximum": 60000.0,
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -5110,6 +5138,15 @@
       ],
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+    },
+    "remote_compact": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RemoteCompactConfigToml"
+        }
+      ],
+      "default": null,
+      "description": "V1 remote compaction settings."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

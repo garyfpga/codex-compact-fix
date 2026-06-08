@@ -14,8 +14,6 @@ use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
-use crate::remote_compact_fallback::REMOTE_COMPACT_ATTEMPT_TIMEOUT;
-use crate::remote_compact_fallback::REMOTE_COMPACT_TOTAL_ATTEMPTS;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
@@ -307,9 +305,9 @@ async fn run_remote_compaction_request_v1(
     compaction_trace: &CompactionTraceContext,
     turn_metadata_header: Option<&str>,
 ) -> CodexResult<Vec<ResponseItem>> {
-    let total_attempts: usize = REMOTE_COMPACT_TOTAL_ATTEMPTS
-        .try_into()
-        .unwrap_or(usize::MAX);
+    let total_attempts = turn_context.config.remote_compact.max_attempts;
+    let attempt_timeout = turn_context.config.remote_compact.attempt_timeout;
+    let tcp_keepalive_interval = turn_context.config.remote_compact.tcp_keepalive_interval;
     let mut last_remote_error = None;
 
     for attempt_number in 1..=total_attempts {
@@ -328,7 +326,8 @@ async fn run_remote_compaction_request_v1(
                     effort: turn_context.reasoning_effort.clone(),
                     summary: turn_context.reasoning_summary,
                     service_tier,
-                    request_timeout: REMOTE_COMPACT_ATTEMPT_TIMEOUT,
+                    request_timeout: attempt_timeout,
+                    tcp_keepalive_interval,
                     retry_policy: RetryPolicy {
                         max_attempts: 0,
                         base_delay: Duration::ZERO,
@@ -358,6 +357,7 @@ async fn run_remote_compaction_request_v1(
                     turn_context,
                     attempt_number,
                     total_attempts,
+                    attempt_timeout,
                     &err,
                 )
                 .await;
@@ -391,29 +391,111 @@ async fn log_remote_compaction_request_failure(
 async fn send_remote_compaction_attempt_warning(
     sess: &Session,
     turn_context: &TurnContext,
-    attempt_number: usize,
-    total_attempts: usize,
+    attempt_number: u64,
+    total_attempts: u64,
+    attempt_timeout: Duration,
     err: &CodexErr,
 ) {
+    let message = remote_compaction_attempt_warning_message(
+        attempt_number,
+        total_attempts,
+        attempt_timeout,
+        err,
+    );
+    sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+        .await;
+}
+
+fn remote_compaction_attempt_warning_message(
+    attempt_number: u64,
+    total_attempts: u64,
+    attempt_timeout: Duration,
+    err: &CodexErr,
+) -> String {
     let action = if attempt_number < total_attempts {
         "; retrying remote compact."
     } else {
         "."
     };
-    let message = if is_remote_compaction_timeout(err) {
-        let seconds = REMOTE_COMPACT_ATTEMPT_TIMEOUT.as_secs();
-        format!(
-            "Remote compact attempt {attempt_number}/{total_attempts} timed out after {seconds}s{action}"
-        )
-    } else {
-        format!("Remote compact attempt {attempt_number}/{total_attempts} failed: {err}{action}")
-    };
-    sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
-        .await;
+    match remote_compaction_attempt_warning_kind(err) {
+        RemoteCompactionAttemptWarningKind::Timeout => {
+            let seconds = attempt_timeout.as_secs();
+            format!(
+                "Remote compact attempt {attempt_number}/{total_attempts} timed out after {seconds}s{action}"
+            )
+        }
+        RemoteCompactionAttemptWarningKind::UnexpectedHttp => {
+            format!(
+                "Remote compact attempt {attempt_number}/{total_attempts} got unexpected HTTP response: {err}{action}"
+            )
+        }
+        RemoteCompactionAttemptWarningKind::TransportOrStream => {
+            format!(
+                "Remote compact attempt {attempt_number}/{total_attempts} failed with transport or stream error: {err}{action}"
+            )
+        }
+        RemoteCompactionAttemptWarningKind::ProtocolBodyParse => {
+            format!(
+                "Remote compact attempt {attempt_number}/{total_attempts} failed to parse remote compact response: {err}{action}"
+            )
+        }
+        RemoteCompactionAttemptWarningKind::Other => {
+            format!(
+                "Remote compact attempt {attempt_number}/{total_attempts} failed: {err}{action}"
+            )
+        }
+    }
 }
 
-fn is_remote_compaction_timeout(err: &CodexErr) -> bool {
-    matches!(err, CodexErr::RequestTimeout | CodexErr::Timeout)
+#[derive(Clone, Copy)]
+enum RemoteCompactionAttemptWarningKind {
+    Timeout,
+    UnexpectedHttp,
+    TransportOrStream,
+    ProtocolBodyParse,
+    Other,
+}
+
+fn remote_compaction_attempt_warning_kind(err: &CodexErr) -> RemoteCompactionAttemptWarningKind {
+    match err {
+        CodexErr::RequestTimeout | CodexErr::Timeout => RemoteCompactionAttemptWarningKind::Timeout,
+        CodexErr::UnexpectedStatus(_) => RemoteCompactionAttemptWarningKind::UnexpectedHttp,
+        CodexErr::Stream(..)
+        | CodexErr::ConnectionFailed(_)
+        | CodexErr::ResponseStreamFailed(_) => {
+            RemoteCompactionAttemptWarningKind::TransportOrStream
+        }
+        CodexErr::Json(_) => RemoteCompactionAttemptWarningKind::ProtocolBodyParse,
+        CodexErr::TurnAborted
+        | CodexErr::ContextWindowExceeded
+        | CodexErr::ThreadNotFound(_)
+        | CodexErr::AgentLimitReached { .. }
+        | CodexErr::SessionConfiguredNotFirstEvent
+        | CodexErr::Spawn
+        | CodexErr::Interrupted
+        | CodexErr::InvalidRequest(_)
+        | CodexErr::InvalidImageRequest()
+        | CodexErr::UsageLimitReached(_)
+        | CodexErr::ServerOverloaded
+        | CodexErr::CyberPolicy { .. }
+        | CodexErr::QuotaExceeded
+        | CodexErr::UsageNotIncluded
+        | CodexErr::InternalServerError
+        | CodexErr::RetryLimit(_)
+        | CodexErr::InternalAgentDied
+        | CodexErr::Sandbox(_)
+        | CodexErr::LandlockSandboxExecutableNotProvided
+        | CodexErr::UnsupportedOperation(_)
+        | CodexErr::RefreshTokenFailed(_)
+        | CodexErr::Fatal(_)
+        | CodexErr::Io(_)
+        | CodexErr::TokioJoin(_)
+        | CodexErr::EnvVar(_) => RemoteCompactionAttemptWarningKind::Other,
+        #[cfg(target_os = "linux")]
+        CodexErr::LandlockRuleset(_) | CodexErr::LandlockPathFd(_) => {
+            RemoteCompactionAttemptWarningKind::Other
+        }
+    }
 }
 
 pub(crate) async fn process_compacted_history(

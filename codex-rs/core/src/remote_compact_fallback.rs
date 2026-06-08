@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::compact::InitialContextInjection;
 use crate::compact::PreCompactHookPolicy;
@@ -20,12 +19,6 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
-
-pub(crate) const REMOTE_COMPACT_TOTAL_ATTEMPTS: u64 = 3;
-pub(crate) const REMOTE_COMPACT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(180);
-
-const REMOTE_COMPACT_FALLBACK_WARNING: &str =
-    "Remote compact failed after 3 attempts; falling back to local compact.";
 
 pub(crate) async fn run_v1_remote_first_auto_compact(
     sess: &Arc<Session>,
@@ -182,11 +175,10 @@ async fn restore_clean_history(sess: &Session, clean_history: &ContextManager) {
 }
 
 async fn emit_fallback_warning(sess: &Session, turn_context: &TurnContext) {
-    sess.send_event(
-        turn_context,
-        EventMsg::Warning(WarningEvent {
-            message: REMOTE_COMPACT_FALLBACK_WARNING.to_string(),
-        }),
-    )
-    .await;
+    let max_attempts = turn_context.config.remote_compact.max_attempts;
+    let message = format!(
+        "Remote compact failed after {max_attempts} attempts; falling back to local compact."
+    );
+    sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+        .await;
 }
