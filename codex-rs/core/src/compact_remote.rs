@@ -48,6 +48,8 @@ const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
 #[derive(Clone, Debug)]
 pub(crate) struct RemoteCompactionRunSettings {
     pub(crate) service_tier_override: Option<String>,
+    pub(crate) max_attempts: u64,
+    pub(crate) attempt_timeout: Duration,
 }
 
 pub(crate) async fn run_remote_compact_task_for_mode(
@@ -244,12 +246,19 @@ async fn run_remote_compaction_request_v1(
     turn_metadata_header: Option<&str>,
     settings: &RemoteCompactionRunSettings,
 ) -> CodexResult<Vec<ResponseItem>> {
-    let total_attempts = turn_context.config.remote_compact.max_attempts;
-    let attempt_timeout = turn_context.config.remote_compact.attempt_timeout;
+    let total_attempts = settings.max_attempts;
+    let attempt_timeout = settings.attempt_timeout;
     let tcp_keepalive_interval = turn_context.config.remote_compact.tcp_keepalive_interval;
     let mut last_remote_error = None;
 
     for attempt_number in 1..=total_attempts {
+        info!(
+            version = "V1",
+            attempt_number,
+            total_attempts,
+            turn_id = %turn_context.sub_id,
+            "V1 remote compact attempt"
+        );
         let service_tier = settings.service_tier_override.clone().or_else(|| {
             if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
                 None
@@ -296,6 +305,7 @@ async fn run_remote_compaction_request_v1(
                 send_remote_compaction_attempt_warning(
                     sess,
                     turn_context,
+                    "V1",
                     attempt_number,
                     total_attempts,
                     attempt_timeout,
@@ -329,15 +339,17 @@ async fn log_remote_compaction_request_failure(
     );
 }
 
-async fn send_remote_compaction_attempt_warning(
+pub(crate) async fn send_remote_compaction_attempt_warning(
     sess: &Session,
     turn_context: &TurnContext,
+    version_label: &str,
     attempt_number: u64,
     total_attempts: u64,
     attempt_timeout: Duration,
     err: &CodexErr,
 ) {
     let message = remote_compaction_attempt_warning_message(
+        version_label,
         attempt_number,
         total_attempts,
         attempt_timeout,
@@ -348,6 +360,7 @@ async fn send_remote_compaction_attempt_warning(
 }
 
 fn remote_compaction_attempt_warning_message(
+    version_label: &str,
     attempt_number: u64,
     total_attempts: u64,
     attempt_timeout: Duration,
@@ -362,17 +375,17 @@ fn remote_compaction_attempt_warning_message(
         RemoteCompactionAttemptWarningKind::Timeout => {
             let seconds = attempt_timeout.as_secs();
             format!(
-                "Remote compact attempt {attempt_number}/{total_attempts} timed out after {seconds}s{action}"
+                "{version_label} remote compact attempt {attempt_number}/{total_attempts} timed out after {seconds}s{action}"
             )
         }
         RemoteCompactionAttemptWarningKind::UnexpectedHttp => {
             format!(
-                "Remote compact attempt {attempt_number}/{total_attempts} got unexpected HTTP response: {err}{action}"
+                "{version_label} remote compact attempt {attempt_number}/{total_attempts} got unexpected HTTP response: {err}{action}"
             )
         }
         RemoteCompactionAttemptWarningKind::TransportOrStream => {
             format!(
-                "Remote compact attempt {attempt_number}/{total_attempts} failed with transport or stream error: {err}{action}"
+                "{version_label} remote compact attempt {attempt_number}/{total_attempts} failed with transport or stream error: {err}{action}"
             )
         }
         RemoteCompactionAttemptWarningKind::ProtocolBodyParse => {
@@ -382,12 +395,12 @@ fn remote_compaction_attempt_warning_message(
                 err.to_string()
             };
             format!(
-                "Remote compact attempt {attempt_number}/{total_attempts} failed to parse remote compact response: {detail}{action}"
+                "{version_label} remote compact attempt {attempt_number}/{total_attempts} failed to parse remote compact response: {detail}{action}"
             )
         }
         RemoteCompactionAttemptWarningKind::Other => {
             format!(
-                "Remote compact attempt {attempt_number}/{total_attempts} failed: {err}{action}"
+                "{version_label} remote compact attempt {attempt_number}/{total_attempts} failed: {err}{action}"
             )
         }
     }

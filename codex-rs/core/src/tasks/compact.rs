@@ -3,6 +3,8 @@ use std::sync::Arc;
 use super::SessionTask;
 use super::SessionTaskContext;
 use super::emit_compact_metric;
+use crate::remote_compact_fallback::RemoteCompactVersion;
+use crate::remote_compact_fallback::run_remote_first_manual_compact;
 use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
@@ -30,28 +32,15 @@ impl SessionTask for CompactTask {
     ) -> Option<String> {
         let session = session.clone_session();
         let _ = if crate::compact::should_use_remote_compact_task(ctx.provider.info()) {
-            if ctx
+            let version = if ctx
                 .features
                 .enabled(codex_features::Feature::RemoteCompactionV2)
             {
-                emit_compact_metric(
-                    &session.services.session_telemetry,
-                    "remote_v2",
-                    /*manual*/ true,
-                );
-                crate::compact_remote_v2::run_remote_compact_task(session.clone(), ctx).await
+                RemoteCompactVersion::V2
             } else {
-                emit_compact_metric(
-                    &session.services.session_telemetry,
-                    "remote",
-                    /*manual*/ true,
-                );
-                crate::remote_compact_fallback::run_v1_remote_first_manual_compact(
-                    session.clone(),
-                    ctx,
-                )
-                .await
-            }
+                RemoteCompactVersion::V1
+            };
+            run_remote_first_manual_compact(session.clone(), ctx, version).await
         } else {
             emit_compact_metric(
                 &session.services.session_telemetry,

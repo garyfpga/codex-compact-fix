@@ -357,6 +357,60 @@ fn assert_remote_compact_fallback_warning_count(warnings: &[String], total_attem
     );
 }
 
+fn assert_v2_remote_compact_fallback_warnings(warnings: &[String], total_attempts: usize) {
+    let attempt_warnings = warnings
+        .iter()
+        .filter(|message| message.starts_with("V2 remote compact attempt "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        attempt_warnings.len(),
+        total_attempts,
+        "expected one visible V2 warning for each remote compact attempt, got {warnings:?}"
+    );
+    for (attempt_number, message) in (1..=total_attempts).zip(attempt_warnings) {
+        let expected_attempt =
+            format!("V2 remote compact attempt {attempt_number}/{total_attempts} ");
+        assert!(
+            message.starts_with(&expected_attempt)
+                && (message.contains("failed") || message.contains("timed out after 180s")),
+            "expected visible V2 warning for attempt {attempt_number}/{total_attempts}, got {message}"
+        );
+    }
+
+    let expected_fallback_warning = format!(
+        "V2 remote compact failed after {total_attempts} attempts; falling back to local compact."
+    );
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|message| message.as_str() == expected_fallback_warning)
+            .count(),
+        1,
+        "expected one visible V2 local compact fallback warning, got {warnings:?}"
+    );
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|message| message.starts_with("Remote compact attempt "))
+            .count(),
+        0,
+        "expected no V1 remote compact attempt warnings in V2 path, got {warnings:?}"
+    );
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|message| {
+                message.as_str()
+                    == format!(
+                        "Remote compact failed after {total_attempts} attempts; falling back to local compact."
+                    )
+            })
+            .count(),
+        0,
+        "expected no V1 remote compact fallback warning in V2 path, got {warnings:?}"
+    );
+}
+
 fn assert_local_fallback_compact_request_is_clean(
     request: &responses::ResponsesRequest,
     warning_messages: &[String],
@@ -410,6 +464,26 @@ fn assert_request_does_not_contain_texts(
             "request body should not contain `{forbidden_text}`"
         );
     }
+}
+
+fn assert_v2_remote_compact_request(request: &responses::ResponsesRequest) {
+    assert_eq!(request.path(), "/v1/responses");
+    assert!(
+        request
+            .header("x-codex-beta-features")
+            .as_deref()
+            .is_some_and(|value| value
+                .split(',')
+                .any(|feature| feature.trim() == "remote_compaction_v2")),
+        "expected V2 compact request to advertise the remote_compaction_v2 beta feature"
+    );
+    assert!(
+        request
+            .body_json()
+            .to_string()
+            .contains("\"type\":\"compaction_trigger\""),
+        "expected V2 compact request to include the compaction_trigger item"
+    );
 }
 
 fn invalid_remote_compact_output_payload() -> Value {
@@ -1310,6 +1384,328 @@ async fn remote_compact_v2_accepts_additional_output_items_before_compaction() -
         !follow_up_body.contains("IGNORED_COMPACT_REPLY"),
         "expected follow-up request to ignore unrelated output items from the compaction stream"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_falls_back_after_exact_max_attempts() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+                config.remote_compact = remote_compact_config(2, 180, 1000);
+                config.model_provider.request_max_retries = Some(0);
+                config.model_provider.stream_max_retries = Some(0);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![responses::ev_response_created("remote-v2-failure-1")]),
+            responses::sse(vec![responses::ev_response_created("remote-v2-failure-2")]),
+            responses::sse(vec![
+                responses::ev_assistant_message(
+                    "local-v2-fallback-summary",
+                    "LOCAL_V2_FALLBACK_SUMMARY",
+                ),
+                responses::ev_completed_with_tokens(
+                    "local-v2-fallback-response",
+                    /*total_tokens*/ 80,
+                ),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("post-v2-fallback-assistant", "post fallback ran"),
+                responses::ev_completed_with_tokens(
+                    "post-v2-fallback-response",
+                    /*total_tokens*/ 80,
+                ),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+
+    let warnings = collect_warnings_until_turn_complete(&codex).await;
+    assert_eq!(
+        warnings.len(),
+        3,
+        "expected two V2 attempt warnings and one V2 fallback warning"
+    );
+    assert_v2_remote_compact_fallback_warnings(&warnings, 2);
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        5,
+        "expected initial turn, two remote compact attempts, local fallback compact request, and follow-up turn"
+    );
+    assert!(
+        response_requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses"),
+        "expected V2 remote compaction and local fallback to use /v1/responses rather than /v1/responses/compact"
+    );
+
+    for request in &response_requests[1..=2] {
+        assert_v2_remote_compact_request(request);
+    }
+
+    let local_fallback_compact_request = &response_requests[3];
+    assert_local_fallback_compact_request_is_clean(local_fallback_compact_request, &warnings);
+    let local_fallback_compact_body = local_fallback_compact_request.body_json().to_string();
+    assert!(
+        local_fallback_compact_body.contains("hello remote compact"),
+        "expected fallback local compact request to retain pre-compaction user history"
+    );
+    assert!(
+        local_fallback_compact_body.contains("FIRST_REMOTE_REPLY"),
+        "expected fallback local compact request to retain pre-compaction assistant history"
+    );
+    assert!(
+        !local_fallback_compact_body.contains("after compact"),
+        "expected fallback local compact request to exclude incoming user message"
+    );
+
+    let post_fallback_turn_request = &response_requests[4];
+    let post_fallback_turn_body = post_fallback_turn_request.body_json().to_string();
+    assert!(
+        post_fallback_turn_body.contains("LOCAL_V2_FALLBACK_SUMMARY"),
+        "expected post-fallback sampling request to use the fallback compact summary"
+    );
+    assert!(
+        post_fallback_turn_body.contains("after compact"),
+        "expected agent loop to continue with the pending user turn after local fallback"
+    );
+
+    let warning_texts = warnings.iter().map(String::as_str).collect::<Vec<_>>();
+    assert_request_does_not_contain_texts(post_fallback_turn_request, &warning_texts);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_uses_priority_and_restores_original_tier_after_fallback() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model_info_override("gpt-5.4", |model_info| {
+                model_info.service_tiers = vec![ModelServiceTier {
+                    id: ServiceTier::Fast.request_value().to_string(),
+                    name: "fast".to_string(),
+                    description: "Fast processing.".to_string(),
+                }];
+            })
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+                config.remote_compact = remote_compact_config(2, 180, 1000);
+                config.model_provider.request_max_retries = Some(0);
+                config.model_provider.stream_max_retries = Some(0);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let original_service_tier = harness
+        .test()
+        .config
+        .service_tier
+        .as_deref()
+        .unwrap_or("default");
+    let (compact_start_status, compact_finish_status) =
+        compact_service_tier_switch_messages(original_service_tier);
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![responses::ev_response_created(
+                "remote-v2-fast-failure-1",
+            )]),
+            responses::sse(vec![responses::ev_response_created(
+                "remote-v2-fast-failure-2",
+            )]),
+            responses::sse(vec![
+                responses::ev_assistant_message(
+                    "local-v2-fast-fallback-summary",
+                    "LOCAL_V2_PRIORITY_FALLBACK_SUMMARY",
+                ),
+                responses::ev_completed_with_tokens(
+                    "local-v2-fast-fallback-response",
+                    /*total_tokens*/ 80,
+                ),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message(
+                    "post-v2-fast-fallback-assistant",
+                    "post fallback ran",
+                ),
+                responses::ev_completed_with_tokens(
+                    "post-v2-fast-fallback-response",
+                    /*total_tokens*/ 80,
+                ),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+
+    let warnings = collect_warnings_until_turn_complete(&codex).await;
+    assert_eq!(
+        warnings.first().map(String::as_str),
+        Some(compact_start_status.as_str()),
+        "expected the fast-tier switch status message before remote retries"
+    );
+    assert_eq!(
+        warnings.last().map(String::as_str),
+        Some(compact_finish_status.as_str()),
+        "expected the fast-tier restore status message after local fallback"
+    );
+    assert_eq!(
+        warnings.len(),
+        5,
+        "expected the fast-tier switch, two V2 attempt warnings, one V2 fallback warning, and the fast-tier restore message"
+    );
+    assert_v2_remote_compact_fallback_warnings(&warnings, 2);
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        5,
+        "expected initial turn, two remote compact attempts, local fallback compact request, and follow-up turn"
+    );
+    assert!(
+        response_requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses"),
+        "expected V2 remote compaction and local fallback to use /v1/responses rather than /v1/responses/compact"
+    );
+
+    let warning_texts = warnings.iter().map(String::as_str).collect::<Vec<_>>();
+    for request in &response_requests[1..=2] {
+        assert_v2_remote_compact_request(request);
+        assert_eq!(
+            request
+                .body_json()
+                .get("service_tier")
+                .and_then(Value::as_str),
+            Some("priority"),
+            "expected V2 remote compact attempts to use the fast service tier"
+        );
+    }
+
+    let local_fallback_compact_request = &response_requests[3];
+    assert_local_fallback_compact_request_is_clean(local_fallback_compact_request, &warnings);
+    assert_eq!(
+        local_fallback_compact_request
+            .body_json()
+            .get("service_tier")
+            .and_then(Value::as_str),
+        Some("priority"),
+        "expected local fallback compact to reuse the fast service tier"
+    );
+    let local_fallback_compact_body = local_fallback_compact_request.body_json().to_string();
+    assert!(
+        local_fallback_compact_body.contains("hello remote compact"),
+        "expected fallback local compact request to retain pre-compaction user history"
+    );
+    assert!(
+        local_fallback_compact_body.contains("FIRST_REMOTE_REPLY"),
+        "expected fallback local compact request to retain pre-compaction assistant history"
+    );
+
+    let post_fallback_turn_request = &response_requests[4];
+    assert_eq!(
+        post_fallback_turn_request.body_json().get("service_tier"),
+        None,
+        "expected post-fallback sampling to return to the original service tier"
+    );
+    let post_fallback_turn_body = post_fallback_turn_request.body_json().to_string();
+    assert!(
+        post_fallback_turn_body.contains("LOCAL_V2_PRIORITY_FALLBACK_SUMMARY"),
+        "expected post-fallback sampling request to use the fallback compact summary"
+    );
+    assert!(
+        post_fallback_turn_body.contains("after compact"),
+        "expected agent loop to continue with the pending user turn after local fallback"
+    );
+    assert_request_does_not_contain_texts(post_fallback_turn_request, &warning_texts);
 
     Ok(())
 }

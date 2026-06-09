@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::Prompt;
 use crate::ResponseStream;
@@ -10,14 +11,13 @@ use crate::compact::compaction_status_from_result;
 use crate::compact_remote::build_compact_request_log_data;
 use crate::compact_remote::log_remote_compact_failure;
 use crate::compact_remote::process_compacted_history;
+use crate::compact_remote::send_remote_compaction_attempt_warning;
 use crate::compact_remote::should_keep_compacted_history_item;
 use crate::compact_remote::trim_function_call_history_to_fit_context_window;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
-use crate::responses_retry::ResponsesStreamRequest;
-use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
@@ -33,11 +33,10 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TruncationPolicy;
-use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
+use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::truncate_text;
@@ -48,56 +47,15 @@ use tracing::info;
 // Mirror the current /responses/compact retained-message default while the
 // server-side path remains the reference implementation.
 const RETAINED_MESSAGE_TOKEN_BUDGET: usize = 64_000;
-// Compact attempts can run much longer than normal turns, so keep the per-transport
-// retry budget smaller than the general Responses stream retry budget.
-const MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES: u64 = 2;
 
-pub(crate) async fn run_inline_remote_auto_compact_task(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    client_session: &mut ModelClientSession,
-    initial_context_injection: InitialContextInjection,
-    reason: CompactionReason,
-    phase: CompactionPhase,
-) -> CodexResult<()> {
-    run_remote_compact_task_inner(
-        &sess,
-        &turn_context,
-        Some(client_session),
-        initial_context_injection,
-        CompactionTrigger::Auto,
-        reason,
-        phase,
-    )
-    .await
+#[derive(Clone, Debug)]
+pub(crate) struct RemoteCompactionV2RunSettings {
+    pub(crate) service_tier_override: Option<String>,
+    pub(crate) max_attempts: u64,
+    pub(crate) attempt_timeout: Duration,
 }
 
-pub(crate) async fn run_remote_compact_task(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-) -> CodexResult<()> {
-    let start_event = EventMsg::TurnStarted(TurnStartedEvent {
-        turn_id: turn_context.sub_id.clone(),
-        trace_id: turn_context.trace_id.clone(),
-        started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
-        model_context_window: turn_context.model_context_window(),
-        collaboration_mode_kind: turn_context.collaboration_mode.mode,
-    });
-    sess.send_event(&turn_context, start_event).await;
-
-    run_remote_compact_task_inner(
-        &sess,
-        &turn_context,
-        /*client_session*/ None,
-        InitialContextInjection::DoNotInject,
-        CompactionTrigger::Manual,
-        CompactionReason::UserRequested,
-        CompactionPhase::StandaloneTurn,
-    )
-    .await
-}
-
-async fn run_remote_compact_task_inner(
+pub(crate) async fn run_remote_compact_task_for_mode(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: Option<&mut ModelClientSession>,
@@ -105,6 +63,7 @@ async fn run_remote_compact_task_inner(
     trigger: CompactionTrigger,
     reason: CompactionReason,
     phase: CompactionPhase,
+    settings: RemoteCompactionV2RunSettings,
 ) -> CodexResult<()> {
     let compaction_metadata = CompactionTurnMetadata::new(
         trigger,
@@ -145,6 +104,7 @@ async fn run_remote_compact_task_inner(
         initial_context_injection,
         compaction_metadata,
         &mut active_context_tokens_before,
+        &settings,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -171,15 +131,7 @@ async fn run_remote_compact_task_inner(
             Some(active_context_tokens_before),
         )
         .await;
-    if let Err(err) = result {
-        sess.track_turn_codex_error(turn_context, &err);
-        let event = EventMsg::Error(
-            err.to_error_event(Some("Error running remote compact task".to_string())),
-        );
-        sess.send_event(turn_context, event).await;
-        return Err(err);
-    }
-    Ok(())
+    result
 }
 
 async fn run_remote_compact_task_inner_impl(
@@ -189,6 +141,7 @@ async fn run_remote_compact_task_inner_impl(
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
     active_context_tokens_before: &mut i64,
+    settings: &RemoteCompactionV2RunSettings,
 ) -> CodexResult<()> {
     let context_compaction_item = ContextCompactionItem::new();
     let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
@@ -249,13 +202,6 @@ async fn run_remote_compact_task_inner_impl(
     let turn_metadata_header = turn_context
         .turn_metadata_state
         .current_header_value_for_compaction(&window_id, compaction_metadata);
-    let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
-        "model": turn_context.model_info.slug.as_str(),
-        "instructions": prompt.base_instructions.text.as_str(),
-        "input": &prompt.input,
-        "parallel_tool_calls": prompt.parallel_tool_calls,
-    }));
-
     let mut owned_client_session;
     let client_session = match client_session {
         Some(client_session) => client_session,
@@ -269,15 +215,12 @@ async fn run_remote_compact_task_inner_impl(
         turn_context,
         client_session,
         &prompt,
+        &compaction_trace,
         turn_metadata_header.as_deref(),
+        settings,
     )
     .await;
 
-    trace_attempt.record_result(
-        compaction_output_result
-            .as_ref()
-            .map(|output| std::slice::from_ref(&output.compaction_output)),
-    );
     let RemoteCompactionV2Output {
         compaction_output,
         token_usage,
@@ -325,56 +268,90 @@ async fn run_remote_compaction_request_v2(
     turn_context: &TurnContext,
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
+    compaction_trace: &CompactionTraceContext,
     turn_metadata_header: Option<&str>,
+    settings: &RemoteCompactionV2RunSettings,
 ) -> CodexResult<RemoteCompactionV2Output> {
-    let max_retries = turn_context
-        .provider
-        .info()
-        .stream_max_retries()
-        .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);
-    let mut retries = 0;
-    loop {
-        let result = match client_session
-            .stream(
-                prompt,
-                &turn_context.model_info,
-                &turn_context.session_telemetry,
-                turn_context.reasoning_effort.clone(),
-                turn_context.reasoning_summary,
-                turn_context.config.service_tier.clone(),
-                turn_metadata_header,
-                &InferenceTraceContext::disabled(),
-            )
-            .await
+    let total_attempts = settings.max_attempts;
+    let attempt_timeout = settings.attempt_timeout;
+    let mut last_remote_error = None;
+
+    for attempt_number in 1..=total_attempts {
+        info!(
+            version = "V2",
+            attempt_number,
+            total_attempts,
+            turn_id = %turn_context.sub_id,
+            "V2 remote compact attempt"
+        );
+        let service_tier = settings
+            .service_tier_override
+            .clone()
+            .or_else(|| turn_context.config.service_tier.clone());
+        let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
+            "model": turn_context.model_info.slug.as_str(),
+            "instructions": prompt.base_instructions.text.as_str(),
+            "input": &prompt.input,
+            "parallel_tool_calls": prompt.parallel_tool_calls,
+            "service_tier": service_tier.as_deref(),
+        }));
+
+        let result = match tokio::time::timeout(attempt_timeout, async {
+            match client_session
+                .stream(
+                    prompt,
+                    &turn_context.model_info,
+                    &turn_context.session_telemetry,
+                    turn_context.reasoning_effort.clone(),
+                    turn_context.reasoning_summary,
+                    service_tier,
+                    turn_metadata_header,
+                    &InferenceTraceContext::disabled(),
+                )
+                .await
+            {
+                Ok(stream) => collect_compaction_output(stream).await,
+                Err(err) => Err(err),
+            }
+        })
+        .await
         {
-            Ok(stream) => collect_compaction_output(stream).await,
-            Err(err) => Err(err),
+            Ok(result) => result,
+            Err(_) => Err(CodexErr::RequestTimeout),
         };
+
+        trace_attempt.record_result(
+            result
+                .as_ref()
+                .map(|output| std::slice::from_ref(&output.compaction_output)),
+        );
 
         match result {
             Ok(compaction_output) => return Ok(compaction_output),
-            Err(err) if !err.is_retryable() => {
+            Err(err) if matches!(err, CodexErr::Interrupted | CodexErr::TurnAborted) => {
                 log_remote_compaction_request_failure(sess, turn_context, prompt, &err).await;
                 return Err(err);
             }
             Err(err) => {
-                if let Err(err) = handle_retryable_response_stream_error(
-                    &mut retries,
-                    max_retries,
-                    err,
-                    client_session,
+                log_remote_compaction_request_failure(sess, turn_context, prompt, &err).await;
+                send_remote_compaction_attempt_warning(
                     sess,
                     turn_context,
-                    ResponsesStreamRequest::RemoteCompactionV2,
+                    "V2",
+                    attempt_number,
+                    total_attempts,
+                    attempt_timeout,
+                    &err,
                 )
-                .await
-                {
-                    log_remote_compaction_request_failure(sess, turn_context, prompt, &err).await;
-                    return Err(err);
-                }
+                .await;
+                last_remote_error = Some(err);
             }
         }
     }
+
+    Err(last_remote_error.unwrap_or_else(|| {
+        CodexErr::Fatal("remote compact v2 total attempts must be greater than zero".to_string())
+    }))
 }
 
 async fn log_remote_compaction_request_failure(

@@ -1,15 +1,18 @@
 use std::sync::Arc;
 
+use crate::client::ModelClientSession;
 use crate::compact::InitialContextInjection;
 use crate::compact::LocalCompactRunSettings;
 use crate::compact::PreCompactHookPolicy;
 use crate::compact::run_compact_task_after_turn_started_with_settings;
 use crate::compact::run_inline_auto_compact_task_with_pre_hook_policy_and_settings;
 use crate::compact::send_compact_turn_started;
+use crate::compact_remote;
 use crate::compact_remote::RemoteCompactionRunSettings;
-use crate::compact_remote::run_remote_compact_task_for_mode;
-use crate::compact_service_tier::V1RemoteFirstCompactServiceTier;
-use crate::compact_service_tier::resolve_v1_remote_first_compact_service_tiers;
+use crate::compact_remote_v2;
+use crate::compact_remote_v2::RemoteCompactionV2RunSettings;
+use crate::compact_service_tier::RemoteFirstCompactServiceTier;
+use crate::compact_service_tier::resolve_remote_first_compact_service_tiers;
 use crate::context_manager::ContextManager;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -24,35 +27,69 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 
-pub(crate) async fn run_v1_remote_first_auto_compact(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RemoteCompactVersion {
+    V1,
+    V2,
+}
+
+impl RemoteCompactVersion {
+    fn display_name(self) -> &'static str {
+        match self {
+            RemoteCompactVersion::V1 => "V1",
+            RemoteCompactVersion::V2 => "V2",
+        }
+    }
+
+    fn metric_label(self) -> &'static str {
+        match self {
+            RemoteCompactVersion::V1 => "remote",
+            RemoteCompactVersion::V2 => "remote_v2",
+        }
+    }
+}
+
+pub(crate) async fn run_remote_first_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
+    version: RemoteCompactVersion,
 ) -> CodexResult<()> {
-    run_v1_remote_first_compact(
+    Box::pin(run_remote_first_compact(
         Arc::clone(sess),
         Arc::clone(turn_context),
-        V1RemoteCompactKind::Auto {
+        Some(client_session),
+        RemoteCompactKind::Auto {
             initial_context_injection,
             reason,
             phase,
         },
-    )
+        version,
+    ))
     .await
 }
 
-pub(crate) async fn run_v1_remote_first_manual_compact(
+pub(crate) async fn run_remote_first_manual_compact(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    version: RemoteCompactVersion,
 ) -> CodexResult<()> {
     send_compact_turn_started(&sess, &turn_context).await;
-    run_v1_remote_first_compact(sess, turn_context, V1RemoteCompactKind::Manual).await
+    Box::pin(run_remote_first_compact(
+        sess,
+        turn_context,
+        None,
+        RemoteCompactKind::Manual,
+        version,
+    ))
+    .await
 }
 
 #[derive(Clone, Copy)]
-enum V1RemoteCompactKind {
+enum RemoteCompactKind {
     Auto {
         initial_context_injection: InitialContextInjection,
         reason: CompactionReason,
@@ -61,9 +98,9 @@ enum V1RemoteCompactKind {
     Manual,
 }
 
-impl V1RemoteCompactKind {
+impl RemoteCompactKind {
     fn is_manual(self) -> bool {
-        matches!(self, V1RemoteCompactKind::Manual)
+        matches!(self, RemoteCompactKind::Manual)
     }
 
     fn remote_args(
@@ -75,7 +112,7 @@ impl V1RemoteCompactKind {
         CompactionPhase,
     ) {
         match self {
-            V1RemoteCompactKind::Auto {
+            RemoteCompactKind::Auto {
                 initial_context_injection,
                 reason,
                 phase,
@@ -85,7 +122,7 @@ impl V1RemoteCompactKind {
                 reason,
                 phase,
             ),
-            V1RemoteCompactKind::Manual => (
+            RemoteCompactKind::Manual => (
                 InitialContextInjection::DoNotInject,
                 CompactionTrigger::Manual,
                 CompactionReason::UserRequested,
@@ -95,12 +132,14 @@ impl V1RemoteCompactKind {
     }
 }
 
-async fn run_v1_remote_first_compact(
+async fn run_remote_first_compact(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    kind: V1RemoteCompactKind,
+    client_session: Option<&mut ModelClientSession>,
+    kind: RemoteCompactKind,
+    version: RemoteCompactVersion,
 ) -> CodexResult<()> {
-    let compact_service_tiers = resolve_v1_remote_first_compact_service_tiers(&sess, &turn_context);
+    let compact_service_tiers = resolve_remote_first_compact_service_tiers(&sess, &turn_context);
     let original_service_tier = turn_context
         .config
         .service_tier
@@ -126,7 +165,22 @@ async fn run_v1_remote_first_compact(
         .await;
     }
 
-    match run_remote_attempt(&sess, &turn_context, kind, &compact_service_tiers).await {
+    emit_compact_metric(
+        &sess.services.session_telemetry,
+        version.metric_label(),
+        kind.is_manual(),
+    );
+
+    match run_remote_attempt(
+        &sess,
+        &turn_context,
+        client_session,
+        kind,
+        version,
+        &compact_service_tiers,
+    )
+    .await
+    {
         Ok(()) => {
             if emit_service_tier_status {
                 emit_compact_service_tier_status(
@@ -146,7 +200,7 @@ async fn run_v1_remote_first_compact(
     }
 
     restore_clean_history(&sess, &clean_history).await;
-    emit_fallback_warning(&sess, &turn_context).await;
+    emit_fallback_warning(&sess, &turn_context, version).await;
     emit_compact_metric(&sess.services.session_telemetry, "local", kind.is_manual());
     let result = run_local_fallback(
         Arc::clone(&sess),
@@ -173,29 +227,60 @@ async fn run_v1_remote_first_compact(
 async fn run_remote_attempt(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    kind: V1RemoteCompactKind,
-    compact_service_tiers: &V1RemoteFirstCompactServiceTier,
+    client_session: Option<&mut ModelClientSession>,
+    kind: RemoteCompactKind,
+    version: RemoteCompactVersion,
+    compact_service_tiers: &RemoteFirstCompactServiceTier,
 ) -> CodexResult<()> {
     let (initial_context_injection, trigger, reason, phase) = kind.remote_args();
-    run_remote_compact_task_for_mode(
-        sess,
-        turn_context,
-        initial_context_injection,
-        trigger,
-        reason,
-        phase,
-        RemoteCompactionRunSettings {
-            service_tier_override: compact_service_tiers.remote_service_tier_override.clone(),
-        },
-    )
-    .await
+    let max_attempts = turn_context.config.remote_compact.max_attempts;
+    let attempt_timeout = turn_context.config.remote_compact.attempt_timeout;
+    match version {
+        RemoteCompactVersion::V1 => {
+            compact_remote::run_remote_compact_task_for_mode(
+                sess,
+                turn_context,
+                initial_context_injection,
+                trigger,
+                reason,
+                phase,
+                RemoteCompactionRunSettings {
+                    service_tier_override: compact_service_tiers
+                        .remote_service_tier_override
+                        .clone(),
+                    max_attempts,
+                    attempt_timeout,
+                },
+            )
+            .await
+        }
+        RemoteCompactVersion::V2 => {
+            compact_remote_v2::run_remote_compact_task_for_mode(
+                sess,
+                turn_context,
+                client_session,
+                initial_context_injection,
+                trigger,
+                reason,
+                phase,
+                RemoteCompactionV2RunSettings {
+                    service_tier_override: compact_service_tiers
+                        .remote_service_tier_override
+                        .clone(),
+                    max_attempts,
+                    attempt_timeout,
+                },
+            )
+            .await
+        }
+    }
 }
 
 async fn run_local_fallback(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    kind: V1RemoteCompactKind,
-    compact_service_tiers: &V1RemoteFirstCompactServiceTier,
+    kind: RemoteCompactKind,
+    compact_service_tiers: &RemoteFirstCompactServiceTier,
 ) -> CodexResult<()> {
     let local_run_settings = LocalCompactRunSettings {
         service_tier_override: compact_service_tiers
@@ -203,7 +288,7 @@ async fn run_local_fallback(
             .clone(),
     };
     match kind {
-        V1RemoteCompactKind::Auto {
+        RemoteCompactKind::Auto {
             initial_context_injection,
             reason,
             phase,
@@ -219,7 +304,7 @@ async fn run_local_fallback(
             )
             .await
         }
-        V1RemoteCompactKind::Manual => {
+        RemoteCompactKind::Manual => {
             let input = vec![UserInput::Text {
                 text: turn_context.compact_prompt().to_string(),
                 // Compaction prompt is synthesized; no UI element ranges to preserve.
@@ -254,10 +339,15 @@ async fn emit_compact_service_tier_status(
         .await;
 }
 
-async fn emit_fallback_warning(sess: &Session, turn_context: &TurnContext) {
+async fn emit_fallback_warning(
+    sess: &Session,
+    turn_context: &TurnContext,
+    version: RemoteCompactVersion,
+) {
     let max_attempts = turn_context.config.remote_compact.max_attempts;
+    let version = version.display_name();
     let message = format!(
-        "Remote compact failed after {max_attempts} attempts; falling back to local compact."
+        "{version} remote compact failed after {max_attempts} attempts; falling back to local compact."
     );
     sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
         .await;
