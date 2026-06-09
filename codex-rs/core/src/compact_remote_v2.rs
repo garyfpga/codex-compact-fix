@@ -26,6 +26,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_app_server_protocol::AuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -284,10 +285,13 @@ async fn run_remote_compaction_request_v2(
             turn_id = %turn_context.sub_id,
             "V2 remote compact attempt"
         );
-        let service_tier = settings
-            .service_tier_override
-            .clone()
-            .or_else(|| turn_context.config.service_tier.clone());
+        let service_tier = settings.service_tier_override.clone().or_else(|| {
+            if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
+                None
+            } else {
+                turn_context.config.service_tier.clone()
+            }
+        });
         let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
             "model": turn_context.model_info.slug.as_str(),
             "instructions": prompt.base_instructions.text.as_str(),

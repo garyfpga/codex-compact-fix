@@ -321,10 +321,10 @@ fn assert_remote_compact_fallback_warnings(warnings: &[String]) {
 
     let attempt_warnings = warnings
         .iter()
-        .filter(|message| message.starts_with("Remote compact attempt "))
+        .filter(|message| message.starts_with("V1 remote compact attempt "))
         .collect::<Vec<_>>();
     for (attempt_number, message) in (1..=3).zip(attempt_warnings) {
-        let expected_attempt = format!("Remote compact attempt {attempt_number}/3 ");
+        let expected_attempt = format!("V1 remote compact attempt {attempt_number}/3 ");
         assert!(
             message.starts_with(&expected_attempt)
                 && (message.contains("failed") || message.contains("timed out after 180s")),
@@ -336,7 +336,7 @@ fn assert_remote_compact_fallback_warnings(warnings: &[String]) {
 fn assert_remote_compact_fallback_warning_count(warnings: &[String], total_attempts: usize) {
     let attempt_warning_count = warnings
         .iter()
-        .filter(|message| message.starts_with("Remote compact attempt "))
+        .filter(|message| message.starts_with("V1 remote compact attempt "))
         .count();
     assert_eq!(
         attempt_warning_count, total_attempts,
@@ -348,7 +348,7 @@ fn assert_remote_compact_fallback_warning_count(warnings: &[String], total_attem
             .filter(|message| {
                 message.as_str()
                     == format!(
-                        "Remote compact failed after {total_attempts} attempts; falling back to local compact."
+                        "V1 remote compact failed after {total_attempts} attempts; falling back to local compact."
                     )
             })
             .count(),
@@ -391,7 +391,7 @@ fn assert_v2_remote_compact_fallback_warnings(warnings: &[String], total_attempt
     assert_eq!(
         warnings
             .iter()
-            .filter(|message| message.starts_with("Remote compact attempt "))
+            .filter(|message| message.starts_with("V1 remote compact attempt "))
             .count(),
         0,
         "expected no V1 remote compact attempt warnings in V2 path, got {warnings:?}"
@@ -402,7 +402,7 @@ fn assert_v2_remote_compact_fallback_warnings(warnings: &[String], total_attempt
             .filter(|message| {
                 message.as_str()
                     == format!(
-                        "Remote compact failed after {total_attempts} attempts; falling back to local compact."
+                        "V1 remote compact failed after {total_attempts} attempts; falling back to local compact."
                     )
             })
             .count(),
@@ -1183,7 +1183,78 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result<()> {
+async fn remote_compact_v2_api_key_auth_omits_service_tier() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::from_api_key("dummy"))
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+                config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("resp-compact"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        2,
+        "expected one normal turn and one V2 remote compact request"
+    );
+    let compact_request = &response_requests[1];
+    assert_v2_remote_compact_request(compact_request);
+    assert_eq!(
+        compact_request.body_json().get("service_tier"),
+        None,
+        "expected V2 remote compact to omit service_tier for API-key auth"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_retries_failures_with_configured_attempt_budget() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
@@ -1191,6 +1262,7 @@ async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
                 let _ = config.features.enable(Feature::RemoteCompactionV2);
+                config.remote_compact = remote_compact_config(3, 180, 1000);
                 config.model_provider.request_max_retries = Some(0);
                 config.model_provider.stream_max_retries = Some(2);
             }),
@@ -3271,17 +3343,17 @@ async fn remote_manual_compact_timeout_warning_mentions_configured_attempt_timeo
 
     let attempt_warnings = warnings
         .iter()
-        .filter(|message| message.starts_with("Remote compact attempt "))
+        .filter(|message| message.starts_with("V1 remote compact attempt "))
         .collect::<Vec<_>>();
     assert_eq!(attempt_warnings.len(), 2, "expected two timeout warnings");
     assert_eq!(
         attempt_warnings[0].as_str(),
-        "Remote compact attempt 1/2 timed out after 2s; retrying remote compact.",
+        "V1 remote compact attempt 1/2 timed out after 2s; retrying remote compact.",
         "expected the first timeout warning to use the configured attempt timeout, got {warnings:?}"
     );
     assert_eq!(
         attempt_warnings[1].as_str(),
-        "Remote compact attempt 2/2 timed out after 2s.",
+        "V1 remote compact attempt 2/2 timed out after 2s.",
         "expected the final timeout warning to use the configured attempt timeout, got {warnings:?}"
     );
 
@@ -3405,7 +3477,7 @@ async fn remote_manual_compact_unexpected_http_warning_includes_cf_ray() -> Resu
     );
     for message in unexpected_http_warnings {
         assert!(
-            message.starts_with("Remote compact attempt "),
+            message.starts_with("V1 remote compact attempt "),
             "expected unexpected HTTP warning to use the categorized prefix, got {message}"
         );
         assert!(

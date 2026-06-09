@@ -147,7 +147,7 @@ async fn remote_compaction_parity_manual_transcripts() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_compaction_parity_v2_api_key_sends_service_tier_upgrade() -> Result<()> {
+async fn remote_compaction_parity_v2_api_key_omits_service_tier() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let scenario = Scenario {
@@ -167,13 +167,12 @@ async fn remote_compaction_parity_v2_api_key_sends_service_tier_upgrade() -> Res
         "legacy /responses/compact should continue omitting service_tier for API-key auth"
     );
     assert_eq!(
-        v2.compact_body.get("service_tier").and_then(Value::as_str),
-        Some(ServiceTier::Fast.request_value()),
-        "v2 compaction should send service_tier through /responses for API-key auth"
+        v2.compact_body.get("service_tier"),
+        None,
+        "v2 compaction should omit service_tier for API-key auth"
     );
 
-    assert_compact_requests_eq_except_v2_service_tier("api-key service tier", &legacy, &v2);
-    assert_follow_up_and_history_eq("api-key service tier", &legacy, &v2);
+    assert_capture_eq("api-key service tier", &legacy, &v2);
     Ok(())
 }
 
@@ -255,27 +254,6 @@ fn assert_capture_eq(label: &str, legacy: &Capture, v2: &Capture) {
         compact_input_len(&legacy.compact_body, Mode::Legacy),
         replacement_history_len(&legacy.replacement_history),
         follow_up_input_len(&legacy.follow_up_body)
-    );
-}
-
-fn assert_compact_requests_eq_except_v2_service_tier(label: &str, legacy: &Capture, v2: &Capture) {
-    assert_eq!(
-        legacy.compact_requests, 1,
-        "legacy compact endpoint should be called exactly once for {label}",
-    );
-    assert_eq!(
-        v2.compact_requests, 0,
-        "v2 should not call /responses/compact for {label}",
-    );
-
-    let mut legacy_compact = compact_request_view(&legacy.compact_body, Mode::Legacy);
-    let mut v2_compact = compact_request_view(&v2.compact_body, Mode::V2);
-    remove_object_field(&mut legacy_compact, "service_tier");
-    remove_object_field(&mut v2_compact, "service_tier");
-    assert_json_eq(
-        &format!("compact request parity mismatch for {label} after service_tier upgrade"),
-        &legacy_compact,
-        &v2_compact,
     );
 }
 
