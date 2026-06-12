@@ -28,6 +28,7 @@ use codex_extension_api::ToolCallOutcome;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
+use codex_rollout::state_db;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
@@ -249,7 +250,6 @@ struct ExposureOverride {
     exposure: ToolExposure,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ExposureOverride {
     fn tool_name(&self) -> ToolName {
         self.handler.tool_name()
@@ -271,11 +271,8 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
         self.handler.search_info()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        self.handler.handle(invocation).await
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        self.handler.handle(invocation)
     }
 }
 
@@ -696,6 +693,16 @@ async fn handle_any_tool(
     let call_id = invocation.call_id.clone();
     let payload = invocation.payload.clone();
     let output = tool.handle(invocation.clone()).await?;
+    if output.contains_external_context()
+        && invocation.turn.config.memories.disable_on_external_context
+    {
+        state_db::mark_thread_memory_mode_polluted(
+            invocation.session.services.state_db.as_deref(),
+            invocation.session.thread_id,
+            "tool_output",
+        )
+        .await;
+    }
     let post_tool_use_payload =
         CoreToolRuntime::post_tool_use_payload(tool, &invocation, output.as_ref());
     Ok(AnyToolResult {

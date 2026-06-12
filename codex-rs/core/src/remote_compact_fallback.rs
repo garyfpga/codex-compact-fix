@@ -13,7 +13,6 @@ use crate::compact_remote_v2;
 use crate::compact_remote_v2::RemoteCompactionV2RunSettings;
 use crate::compact_service_tier::RemoteFirstCompactServiceTier;
 use crate::compact_service_tier::resolve_remote_first_compact_service_tiers;
-use crate::context_manager::ContextManager;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tasks::emit_compact_metric;
@@ -153,7 +152,6 @@ async fn run_remote_first_compact(
             service_tier == ServiceTier::Fast.request_value()
                 && turn_context.config.service_tier.as_deref() != Some(service_tier)
         });
-    let clean_history = sess.clone_history().await;
     if emit_service_tier_status {
         emit_compact_service_tier_status(
             &sess,
@@ -199,7 +197,6 @@ async fn run_remote_first_compact(
         Err(_) => {}
     }
 
-    restore_clean_history(&sess, &clean_history).await;
     emit_fallback_warning(&sess, &turn_context, version).await;
     emit_compact_metric(&sess.services.session_telemetry, "local", kind.is_manual());
     let result = run_local_fallback(
@@ -320,14 +317,6 @@ async fn run_local_fallback(
             .await
         }
     }
-}
-
-async fn restore_clean_history(sess: &Session, clean_history: &ContextManager) {
-    sess.replace_history(
-        clean_history.raw_items().to_vec(),
-        clean_history.reference_context_item(),
-    )
-    .await;
 }
 
 async fn emit_compact_service_tier_status(

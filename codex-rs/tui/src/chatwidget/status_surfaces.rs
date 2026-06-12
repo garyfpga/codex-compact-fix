@@ -10,6 +10,7 @@ use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
 use crate::legacy_core::config::Config;
 use crate::status::format_tokens_compact;
+use crate::version::CODEX_CLI_DISPLAY_VERSION;
 use codex_app_server_protocol::AskForApproval;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
@@ -621,7 +622,7 @@ impl ChatWidget {
                 let label = limit_label_for_window(window.window_minutes, is_secondary);
                 self.status_line_limit_display(Some(window), &label)
             }
-            StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
+            StatusLineItem::CodexVersion => Some(CODEX_CLI_DISPLAY_VERSION.to_string()),
             StatusLineItem::ContextWindowSize => self
                 .status_line_context_window_size()
                 .map(|cws| format!("{} window", format_tokens_compact(cws))),

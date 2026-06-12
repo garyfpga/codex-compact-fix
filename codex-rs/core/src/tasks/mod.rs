@@ -21,6 +21,7 @@ use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
+use crate::codex_thread::BackgroundTerminalInfo;
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::hook_runtime::inspect_pending_input;
@@ -359,6 +360,10 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
         debug_assert!(turn.task.is_none());
+        let agent_execution_guard = self.services.agent_control.execution_guard(
+            turn_context.multi_agent_version,
+            &turn_context.session_source,
+        );
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(
             Arc::clone(self),
@@ -430,6 +435,7 @@ impl Session {
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
             turn_extension_data,
+            _agent_execution_guard: agent_execution_guard,
             _timer: timer,
         };
         turn.task = Some(running_task);
@@ -775,6 +781,17 @@ impl Session {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
+    }
+
+    pub(crate) async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
+        self.services.unified_exec_manager.list_processes().await
+    }
+
+    pub(crate) async fn terminate_background_terminal(&self, process_id: i32) -> bool {
+        self.services
+            .unified_exec_manager
+            .terminate_process(process_id)
+            .await
     }
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {

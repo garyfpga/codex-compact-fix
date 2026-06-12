@@ -150,6 +150,19 @@ async fn status_surface_preview_lines_hardcoded_only_snapshot() {
 }
 
 #[tokio::test]
+async fn status_surface_preview_lines_codex_version_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let snapshot = combined_preview_snapshot(
+        &mut chat,
+        &[StatusLineItem::CodexVersion],
+        &[TerminalTitleItem::CodexVersion],
+    );
+
+    assert_chatwidget_snapshot!("status_surface_previews_codex_version", snapshot);
+}
+
+#[tokio::test]
 async fn thread_title_falls_back_to_thread_id_when_unnamed() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();

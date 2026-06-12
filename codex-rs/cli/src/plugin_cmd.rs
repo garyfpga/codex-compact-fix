@@ -204,7 +204,7 @@ pub async fn run_plugin_list(
         ..
     } = load_plugin_command_context(overrides).await?;
     let outcome = manager
-        .list_marketplaces_for_config(&plugins_input, &[])
+        .list_marketplaces_for_config(&plugins_input, &[], /*include_openai_curated*/ true)
         .context("failed to list marketplace plugins")?;
     ensure_configured_marketplace_snapshots_loaded(
         codex_home.as_path(),
@@ -437,12 +437,12 @@ impl JsonPluginSource {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct JsonMarketplaceSource {
+pub(crate) struct JsonMarketplaceSource {
     source_type: String,
     source: String,
 }
 
-fn configured_marketplace_sources(
+pub(crate) fn configured_marketplace_sources(
     plugins_input: &PluginsConfigInput,
 ) -> HashMap<String, JsonMarketplaceSource> {
     let Some(user_config) = plugins_input.config_layer_stack.effective_user_config() else {
@@ -609,7 +609,7 @@ fn find_marketplace_for_plugin(
     plugin_name: &str,
 ) -> Result<ConfiguredMarketplace> {
     let outcome = manager
-        .list_marketplaces_for_config(plugins_input, &[])
+        .list_marketplaces_for_config(plugins_input, &[], /*include_openai_curated*/ true)
         .context("failed to list marketplace plugins")?;
     ensure_configured_marketplace_snapshots_loaded(
         codex_home,
