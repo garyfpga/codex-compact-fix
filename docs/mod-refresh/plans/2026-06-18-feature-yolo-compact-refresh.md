@@ -228,5 +228,8 @@ If `git tag`, `git push`, or `gh release create` partially succeeds and a later 
 - Verification: `cd codex-rs && timeout 600s cargo check -p codex-core -p codex-tui -p codex-core-skills -p codex-core-plugins -p codex-plugin` completed successfully.
 - Verification: `git diff --check` over metadata, release plan, and upstream-touched files completed successfully.
 - Merge preservation review: PASS.
-- Build: pending.
+- Build: `cd codex-rs && cargo build -p codex-cli --release` completed successfully in 11m 13s. One upstream `unused_mut` warning was emitted in `codex-rs/app-server/src/lib.rs`; no unrelated fix was applied.
+- Build artifact: `codex-rs/target/release/codex` copied to repository-root `codex` using temp-file plus atomic rename after direct overwrite hit `Text file busy`.
+- Build artifact verification: `codex` and `codex-rs/target/release/codex` both size `1242480648`, mode `-rwxr-xr-x`, SHA-256 `82c7a13cb11242901adf11539d1d9472b531c8d2f4b18083a1b30e8f94594763`; `./codex --version` printed `codex-cli 0.0.0`.
+- Build verifier: PASS.
 - Publish: pending.
