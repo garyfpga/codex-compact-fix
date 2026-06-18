@@ -49,38 +49,75 @@ The fork needs these knobs to keep compact behavior deterministic through later 
 - Preserve the exact validation bounds and default values unless the fork intentionally changes the compact contract.
 - Keep the config tests aligned with the runtime defaults and validation errors.
 
-### 2. Shared remote-first fallback policy, fast service tier override, and compact call-site routing
+### 2. Shared remote-first fallback policy for V1 and V2
+**Files**
+- `codex-rs/core/src/remote_compact_fallback.rs`
+- `codex-rs/core/src/compact.rs`
+- `codex-rs/core/src/lib.rs`
+
+**Current anchors**
+- `codex-rs/core/src/remote_compact_fallback.rs:29-343`
+- `codex-rs/core/src/compact.rs:67-74, 125-218, 692-703`
+- `codex-rs/core/src/lib.rs:19-23`
+
+**What changed**
+The fork now centralizes remote-first compaction in one wrapper that chooses `RemoteCompactVersion::V1` or `RemoteCompactVersion::V2`, runs the version-specific remote attempt, and falls back to local compaction with the same cleanup and warning policy. `compact.rs` gained named local compact settings and a pre-hook policy so local fallback can reuse local compaction without duplicate turn-start or hook behavior.
+
+**Why**
+This keeps the compact policy in one place. Future merges are much safer when V1 and V2 share fallback, warning, telemetry, and clean-history behavior instead of carrying separate policy stacks.
+
+**Future merge notes**
+- Preserve `RemoteCompactVersion::V2` as the feature-flagged default when remote compaction V2 is enabled.
+- Keep `PreCompactHookPolicy::SkipAlreadyRan` on local fallback after a remote attempt has already run the hooks.
+- Do not split V1 and V2 back into separate remote-first fallback policies unless the fork intentionally changes the compact contract.
+
+### 3. Fast service tier override for compaction only
 **Files**
 - `codex-rs/core/src/compact_service_tier.rs`
 - `codex-rs/core/src/remote_compact_fallback.rs`
 - `codex-rs/core/src/compact.rs`
-- `codex-rs/core/src/session/turn.rs`
-- `codex-rs/core/src/tasks/compact.rs`
-- `codex-rs/core/src/tasks/regular.rs`
-- `codex-rs/core/src/lib.rs`
 
 **Current anchors**
 - `codex-rs/core/src/compact_service_tier.rs:7-38`
-- `codex-rs/core/src/remote_compact_fallback.rs:29-343`
-- `codex-rs/core/src/compact.rs:67-74, 125-218, 692-703`
+- `codex-rs/core/src/remote_compact_fallback.rs:141-164, 182-219, 276-319`
+- `codex-rs/core/src/compact.rs:125-218`
+
+**What changed**
+The compact path resolves a compact-only service tier once, prefers `fast` when the authenticated model supports it, preserves API-key behavior by omitting the remote tier override, and restores normal request behavior after compact work finishes. Local fallback keeps the same compact-tier decision so a failed remote compact does not silently downgrade the fallback compact request.
+
+**Why**
+The fork wants compaction to use priority capacity when available without changing ordinary sampling traffic. That separation is user-visible through status messages and must not be lost in upstream service-tier refactors.
+
+**Future merge notes**
+- Keep the fast-tier override limited to compact work only.
+- Preserve API-key behavior that omits `service_tier` from remote compact request bodies.
+- Keep the start/finish status messages tied to compact work so normal request tier behavior remains clear.
+
+### 4. Auto and manual compact call-site routing
+**Files**
+- `codex-rs/core/src/remote_compact_fallback.rs`
+- `codex-rs/core/src/session/turn.rs`
+- `codex-rs/core/src/tasks/compact.rs`
+- `codex-rs/core/src/tasks/regular.rs`
+
+**Current anchors**
+- `codex-rs/core/src/remote_compact_fallback.rs:51-88, 134-221`
 - `codex-rs/core/src/session/turn.rs:896-910`
 - `codex-rs/core/src/tasks/compact.rs:34-43`
 - `codex-rs/core/src/tasks/regular.rs:36-81`
-- `codex-rs/core/src/lib.rs:19-23`
 
 **What changed**
-The fork now routes both auto and manual compact through a shared remote-first wrapper that selects `RemoteCompactVersion::V1` or `RemoteCompactVersion::V2`, resolves the compact-only fast tier once, and carries that tier through remote attempts and local fallback. `compact.rs` gained named local compact settings and a pre-hook policy so the wrapper can reuse local compaction without duplicate turn-start or hook behavior. The regular turn task only picked up orchestration refactoring around `run_turn`; its semantics remain ordinary-turn semantics.
+Auto compact in the session turn path and manual compact in the compact task now both enter the same remote-first wrapper when the provider supports remote compaction. The call sites choose V2 when the feature flag is enabled and V1 otherwise, while ordinary turn execution remains ordinary-turn behavior.
 
 **Why**
-This keeps the compact policy in one place. Future merges are much safer when both auto and manual compact share the same wrapper and the same fast-tier decision, instead of having the policy split across call sites.
+Auto and manual compact must not diverge during future upstream merges. The fork relies on both call sites preserving the same version choice, fallback policy, and local compact cleanup.
 
 **Future merge notes**
-- Preserve `RemoteCompactVersion::V2` as the feature-flagged default when remote compaction V2 is enabled.
-- Keep the fast-tier override limited to compact work only.
-- Keep `PreCompactHookPolicy::SkipAlreadyRan` on local fallback after a remote attempt has already run the hooks.
 - Do not split auto/manual compact back into separate remote-first policy stacks unless the fork intentionally changes the contract.
+- Keep local-only compact behavior unchanged when the provider does not support remote compaction.
+- Keep `tasks/regular.rs` ordinary-turn semantics separate from compact routing.
 
-### 3. API/client retry and TCP keepalive support touched by compact
+### 5. API/client retry and TCP keepalive support touched by compact
 **Files**
 - `codex-rs/codex-api/src/endpoint/compact.rs`
 - `codex-rs/codex-api/src/endpoint/session.rs`
@@ -111,7 +148,7 @@ Compact needs transport behavior that is explicit and isolated from the rest of 
 - Keep compact retry policy explicit instead of re-inferring it from provider defaults.
 - Do not reintroduce compact-specific branches into the generic response retry helper.
 
-### 4. V1 remote compact retry, timeout, and TCP keepalive plumbing
+### 6. V1 remote compact retry, timeout, and TCP keepalive plumbing
 **Files**
 - `codex-rs/core/src/compact_remote.rs`
 - `codex-rs/core/src/remote_compact_fallback.rs`
@@ -132,7 +169,7 @@ This is the fork-local behavior that must not regress: bounded visible attempts,
 - Keep failed remote artifacts out of the local fallback history.
 - Preserve the fallback warning count and the configured attempt count in user-visible messages.
 
-### 5. V2 remote compact policy parity
+### 7. V2 remote compact policy parity
 **Files**
 - `codex-rs/core/src/compact_remote_v2.rs`
 - `codex-rs/core/src/remote_compact_fallback.rs`
@@ -158,7 +195,7 @@ The fork's intent is policy parity, not implementation parity. V2 can use its ow
 - Do not let hidden V2 stream retries inflate the visible attempt count.
 - Keep the V1 and V2 warning labels distinct so future merges can reason about the path that failed.
 
-### 6. Integration tests and snapshots that preserve compact behavior
+### 8. Integration tests and snapshots that preserve compact behavior
 **Files**
 - `codex-rs/core/src/config/config_tests.rs`
 - `codex-rs/core/tests/suite/compact_remote.rs`
@@ -182,7 +219,7 @@ These are the guardrails future merge agents need. Compact regressions tend to s
 - Rerun the focused compact tests after any merge conflict resolution in these files.
 - Keep the parity test normalization aligned with intentional V1/V2 differences only.
 
-### 7. Display-only TUI version label `0.139.0+gary`
+### 9. Display-only TUI version label `0.139.0+gary`
 **Files**
 - `codex-rs/tui/src/version.rs`
 - `codex-rs/tui/src/chatwidget/status_surfaces.rs`
@@ -208,21 +245,23 @@ The fork wants a visible version label that can differ from package metadata wit
 - Keep the snapshot updated if the display label intentionally changes.
 - Preserve the separation between display-only UI copy and package metadata.
 
-### 8. Simple Power plan history as the rationale trail
+### 10. Simple Power plan history as the rationale trail
 **Files**
 - `docs/simplepower/plans/2026-06-08-remote-compact-timeout-fallback.md`
 - `docs/simplepower/plans/2026-06-08-compact-fast-service-tier-override.md`
+- `docs/simplepower/plans/2026-06-08-v1-remote-compact-config.md`
 - `docs/simplepower/plans/2026-06-09-v2-remote-compact-policy.md`
 - `docs/simplepower/plans/2026-06-11-upstream-main-compact-preserve-gary-version.md`
 
 **Current anchors**
 - `docs/simplepower/plans/2026-06-08-remote-compact-timeout-fallback.md:1-18, 21-86, 157-201`
 - `docs/simplepower/plans/2026-06-08-compact-fast-service-tier-override.md:1-18, 21-100, 185-248`
+- `docs/simplepower/plans/2026-06-08-v1-remote-compact-config.md:1-18, 28-130, 218-306`
 - `docs/simplepower/plans/2026-06-09-v2-remote-compact-policy.md:1-18, 21-124, 203-244`
 - `docs/simplepower/plans/2026-06-11-upstream-main-compact-preserve-gary-version.md:1-18, 23-90, 111-208`
 
 **What changed**
-These plans form the rationale chain for the fork-local compact behavior: first the bounded V1 timeout/fallback policy, then the compact-only fast-tier override, then V2 policy parity, and finally the upstream merge and display-label preservation step.
+These plans form the rationale chain for the fork-local compact behavior: first the bounded V1 timeout/fallback policy, then the compact-only fast-tier override, then the V1 `remote_compact` config and TCP keepalive contract, then V2 policy parity, and finally the upstream merge and display-label preservation step.
 
 **Why**
 Future merge agents need the human-approved intent, not just the code, when deciding whether a conflict is a regression or a deliberate fork-local behavior.
