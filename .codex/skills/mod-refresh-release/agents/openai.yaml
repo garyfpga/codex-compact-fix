@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mod Refresh Release"
+  short_description: "Orchestrate gated mod release"
+  default_prompt: "Use $mod-refresh-release to merge upstream, preserve local mods, build the Linux CLI binary, tag, and publish a gated mod release."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mod Refresh Merge Preserve"
+  short_description: "Merge upstream and preserve compact-fix behavior"
+  default_prompt: "Use $mod-refresh-merge-preserve to merge upstream/main and preserve this fork's compact-fix behavior from docs/compact-fix/ChangeLog.md."

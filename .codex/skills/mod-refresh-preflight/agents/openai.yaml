@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mod Refresh Preflight"
+  short_description: "Check upstream risk before mod refresh"
+  default_prompt: "Use $mod-refresh-preflight to check whether pulling upstream Codex changes may conflict with fork-local compact-fix mods."
