@@ -7,9 +7,12 @@ description: "Use this skill when asked to check whether pulling upstream Codex 
 
 Run this skill before refreshing the compact-fix fork against upstream Codex. It fetches `upstream/main`, performs only non-mutating analysis, maps upstream changes against `docs/compact-fix/ChangeLog.md`, and reports whether release work should proceed.
 
+This skill is report-only upstream risk analysis. It must not merge, build, tag, publish, invoke `mod-refresh-release`, invoke `mod-refresh-full-release`, or mutate release state. For a complete upstream refresh release, use `$mod-refresh-full-release`.
+
 ## Default Stance
 
-- Report-only is the default. Do not merge into the user's branch, resolve conflicts, build, tag, publish, or invoke `mod-refresh-release` unless the user explicitly asks to continue after seeing the preflight report.
+- Report-only is the default and the hard boundary. Do not merge into the user's branch, resolve conflicts, build, tag, publish, mutate release state, invoke `mod-refresh-release`, or invoke `mod-refresh-full-release`.
+- Never invokes mutating release skills itself, even if the initial request includes release intent. Point full release requests to `$mod-refresh-full-release` after completing the preflight report.
 - Treat `docs/compact-fix/ChangeLog.md` as the compact preservation source of truth. Start impact analysis there before reading implementation code.
 - For new feature work, tell the user to use `simplepower:brainstorming` and explicitly ask brainstorming to run `mod-refresh-preflight` during context exploration.
 
@@ -41,7 +44,8 @@ Run this skill before refreshing the compact-fix fork against upstream Codex. It
 
 6. Report and gate continuation:
    - End with a report using the format below.
-   - If the user explicitly asks to proceed after the report, hand off to `mod-refresh-release`.
+   - Do not hand off to or invoke any mutating release skill from this skill.
+   - If the user asks for a complete upstream refresh release, tell them to use `$mod-refresh-full-release`.
    - If the report shows unresolved blockers, ask for direction instead of continuing.
 
 ## Subagent Policy
@@ -62,4 +66,4 @@ Use concise sections:
 - `Upstream touched files`: grouped by compact-relevant areas and unrelated areas.
 - `Compact impact`: ChangeLog behavior groups affected, risk level, and preservation notes.
 - `Recommendation`: `report-only`, `ready to continue if explicitly requested`, or `blocked`.
-- `Continuation gate`: state that `mod-refresh-release` will only run on explicit user request.
+- `Continuation gate`: state that release mutation requires a separate `$mod-refresh-full-release` or `$mod-refresh-release` invocation with a fresh current-session preflight.

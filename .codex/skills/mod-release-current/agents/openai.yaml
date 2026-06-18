@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mod Release Current"
+  short_description: "Build and publish current HEAD"
+  default_prompt: "Use $mod-release-current to build the current HEAD Linux mod artifact, tag it, and publish the GitHub release without pulling upstream."

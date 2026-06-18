@@ -9,6 +9,8 @@ description: "Orchestrate a mutating mod refresh release. Use this skill when as
 
 Use this skill as the mutation entry point for a full mod refresh release. Require a fresh preflight report, write a release-run plan, then chain the merge, build, and publish skills in order.
 
+When the user wants one request to cover preflight through publish, prefer `$mod-refresh-full-release` as the full upstream refresh entry point. Use `$mod-refresh-release` when a fresh current-session preflight handoff already exists or the user explicitly asks to run the release orchestrator from that state.
+
 ## Required Preflight
 
 Before planning or mutating, require a fresh `mod-refresh-preflight` report from the current session. Treat a preflight as fresh only when it was produced after the current release request and reflects the current worktree, upstream target, release target, and intended artifact.
@@ -32,6 +34,8 @@ Include:
 - Ordered execution checklist for merge preservation, build verification, and publish.
 - Local mod preservation risks and files/areas that need special attention.
 - Build command, expected Linux CLI binary path, and verification command/output to capture.
+- `Tests: not run unless explicitly requested`.
+- `Bazel: not used; using Cargo release build only`.
 - Publish command or process, tag name, release notes source, and artifact upload target.
 - Approval and stop-condition notes.
 
@@ -46,6 +50,12 @@ Run the release chain in this exact order:
 3. `$mod-refresh-publish`
 
 Keep the release plan updated as each stage completes. Record relevant commands, results, changed refs, built artifact paths, and decisions in the plan file.
+
+## Test, Bazel, And Maintenance Policy
+
+Do not run tests or Bazel build/test commands unless the user explicitly requests them. The release flow uses the Cargo release build path only.
+
+Non-test maintenance checks are allowed when they are needed to keep the release artifacts coherent. If dependencies changed, run the required dependency lock maintenance and record the command and result in the release plan.
 
 ## Stop Conditions
 

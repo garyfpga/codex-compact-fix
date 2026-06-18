@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mod Refresh Full Release"
+  short_description: "Preflight, merge, build, and publish"
+  default_prompt: "Use $mod-refresh-full-release to preflight upstream, merge, preserve local mods, build, tag, and publish a full mod refresh release."

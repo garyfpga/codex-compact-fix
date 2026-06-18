@@ -1,13 +1,13 @@
 ---
 name: "mod-refresh-publish"
-description: "Publish the final mod-refresh GitHub release by deriving the version from the final release commit SHA, tagging that commit, creating the GitHub release, and uploading the Linux binary. Use only when invoked by mod-refresh-release or when explicitly asked to tag and publish the mod-refresh GitHub release."
+description: "Publish the final mod GitHub release by deriving the version from the final release commit SHA, tagging that commit, creating the GitHub release, and uploading the Linux binary. Use only when invoked by $mod-refresh-release, invoked by $mod-release-current, or explicitly asked to tag and publish by direct publish request."
 ---
 
 # Mod Refresh Publish
 
 ## Purpose
 
-Use this skill only for the final publish step of a mod-refresh release. It tags the final release commit, creates the matching GitHub release, and uploads the built binary.
+Use this skill only for the final publish step of a mod release. The final release commit can come from either a completed upstream refresh merge or a current-HEAD feature release path. It tags the final release commit, creates the matching GitHub release, and uploads the built binary.
 
 This skill mutates remote release state. Stop on ambiguity rather than guessing.
 
@@ -15,12 +15,12 @@ This skill mutates remote release state. Stop on ambiguity rather than guessing.
 
 Require all of the following before publishing:
 
-- A final release commit checked out as `HEAD`.
-- A verified build artifact in the repository root.
+- A final release commit checked out as `HEAD`, from either a completed upstream refresh merge or a current-HEAD feature release path.
+- A verified build artifact in the repository root for that final `HEAD`.
 - Approved release notes or a release-plan entry that clearly states the notes to publish.
 - A confirmed GitHub repository target for `gh release create`.
 
-Do not continue if the working tree has uncommitted tracked changes that could affect the final release commit. If another commit is created after computing the version, recompute the version from the new `HEAD`.
+Do not continue if the release path, preflight/build provenance, artifact verification, release notes, or publish destination is ambiguous. Do not continue if the working tree has uncommitted tracked changes that could affect the final release commit. If another commit is created after computing the version, recompute the version from the new `HEAD`.
 
 ## Version Contract
 

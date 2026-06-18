@@ -60,7 +60,7 @@ Give each subagent bounded context: the preflight handoff, the current conflict 
 
 5. Resolve conflicts by preserving the compact-fix contract unless a newer, explicit user-approved plan says otherwise.
 
-6. After conflicts are resolved, run the smallest verification that matches touched areas. Follow repository instructions for `just fmt`, focused `just test -p ...`, schema generation, snapshot review, and native build requirements when those surfaces are touched.
+6. After conflicts are resolved, run only the non-test maintenance checks needed by touched files. Allowed examples include `just fmt`, schema generation, snapshot review or acceptance when generated UI/text artifacts intentionally changed, and dependency lock maintenance if dependencies changed. Do not run `just test`, `cargo test`, Bazel tests, full upstream suites, or focused upstream test commands unless the user, coordinator, or release plan explicitly requests tests. Build verification happens in `$mod-refresh-build`; do not run the release build from this skill by default.
 
 7. Use `compact-preservation-reviewer` on the final diff before reporting completion.
 
@@ -78,7 +78,7 @@ Audit every merge resolution and final diff against these ChangeLog items:
 - Preserve ordinary Responses retry behavior by keeping compact-specific retry policy out of generic non-compact endpoint defaults.
 - Preserve V1 user-visible attempt counts, timeout wording, fallback warnings, failure categories, fallback warning counts, and clean-history restore behavior.
 - Preserve V2 policy parity with the shared wrapper, including version-specific attempt budget, timeout semantics, warning labels, request-shape parity where intended, and no hidden stream retries that inflate visible attempts.
-- Preserve compact integration tests, parity tests, config tests, and snapshots whenever request shape, warning text, fallback text, or config behavior changes.
+- Preserve compact integration tests, parity tests, config tests, and snapshots as source artifacts whenever request shape, warning text, fallback text, or config behavior changes; test commands are not run by default.
 - Preserve the TUI display-only version label at `0.139.0+gary`; do not route display surfaces back to `CARGO_PKG_VERSION`.
 - Preserve the Simple Power plan trail under `docs/simplepower/plans/` so future merge agents can read the rationale before changing code.
 - Preserve `docs/compact-fix/ChangeLog.md` itself as the durable behavior map, updating it only when the merge intentionally changes the preserved behavior set.
@@ -104,6 +104,8 @@ Report:
 - Conflict files and how each was resolved.
 - Preservation checklist result, including any items not touched.
 - Verification commands and results.
+- `skipped-test` status, including whether no test commands were requested or which explicit request caused tests to run.
+- `skipped-Bazel` status, including whether no Bazel command was requested or which explicit request caused Bazel to run.
 - Changed files.
 - Whether the merge is ready for the next `$mod-refresh-release` step.
 - Any residual risks, especially skipped tests or preservation assumptions.
