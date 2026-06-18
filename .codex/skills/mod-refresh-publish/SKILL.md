@@ -1,6 +1,6 @@
 ---
 name: "mod-refresh-publish"
-description: "Publish the final mod GitHub release by deriving the base series from the latest stable upstream Codex release and the suffix from final HEAD, tagging that commit, creating the GitHub release, and uploading repo-root codex. Use only when invoked by $mod-refresh-release, invoked by $mod-release-current, or explicitly asked to tag and publish by direct publish request."
+description: "Publish the final mod GitHub release by deriving the base series from the latest stable upstream Codex release, reading checked-in upstreamhash.txt and modversion.txt for the mod version, tagging the final commit, creating the GitHub release, and uploading repo-root codex. Use only when invoked by $mod-refresh-release, invoked by $mod-release-current, or explicitly asked to tag and publish by direct publish request."
 ---
 
 # Mod Refresh Publish
@@ -17,36 +17,51 @@ Require all of the following before publishing:
 
 - A final release commit checked out as `HEAD`, from either a completed upstream refresh merge or a current-HEAD feature release path.
 - A verified build artifact in the repository root for that final `HEAD`.
+- Checked-in repository-root `upstreamhash.txt` and `modversion.txt` metadata files.
 - Approved release notes or a release-plan entry that clearly states the notes to publish.
 - A confirmed GitHub repository target for `gh release create`.
 
-Do not continue if the release path, preflight/build provenance, artifact verification, release notes, or publish destination is ambiguous. Do not continue if the working tree has uncommitted tracked changes that could affect the final release commit. If another commit is created after computing the version, recompute the version from the new `HEAD`.
+Do not continue if the release path, preflight/build provenance, artifact verification, release notes, metadata files, or publish destination is ambiguous. Do not continue if the working tree has uncommitted tracked changes that could affect the final release commit or checked-in metadata. If `upstreamhash.txt` or `modversion.txt` changes after computing the version, recompute and revalidate the version.
 
 ## Version Contract
 
-Compute the release base from GitHub's latest non-prerelease `openai/codex` release every time. Do not hardcode a base series such as `0.139`.
+Compute the release base from GitHub's latest non-draft, non-prerelease `openai/codex` release every time. Do not hardcode a base series such as `0.139`.
 
-Use `gh release view` against the upstream repository, strip `rust-v` or `v`, require a SemVer release name, and use the first two SemVer components as the mod release series:
+Use `gh release list` against the upstream repository, strip `rust-v` or `v`, require a SemVer `x.y.z` release name, and use the first two SemVer components as the mod release series. Read the checked-in repository-root metadata files, validate their exact shapes, derive `upstream_short` from the first five characters of `upstreamhash.txt`, and compute the release version:
 
 ```bash
 final_commit="$(git rev-parse HEAD)"
-xxxxx="$(git rev-parse HEAD | cut -c1-5)"
-latest_release="$(gh release view --repo openai/codex --json name,tagName,isPrerelease,isDraft --jq 'select(.isDraft == false and .isPrerelease == false) | (.name // .tagName)')"
+latest_release="$(gh release list --repo openai/codex --exclude-drafts --exclude-pre-releases --limit 1 --json name,tagName --jq '.[0] | (.name // .tagName)')"
+test -n "${latest_release}" || { echo "no stable upstream release found" >&2; exit 1; }
 base_semver="${latest_release#rust-v}"
 base_semver="${base_semver#v}"
-case "${base_semver}" in
-  [0-9]*.[0-9]*.[0-9]*) ;;
-  *) echo "latest upstream release is not SemVer: ${latest_release}" >&2; exit 1 ;;
-esac
+printf '%s\n' "${base_semver}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+  echo "latest upstream release is not SemVer x.y.z: ${latest_release}" >&2
+  exit 1
+}
 base_series="$(printf '%s\n' "${base_semver}" | awk -F. '{print $1 "." $2}')"
-version="${base_series}.${xxxxx}.mod"
+git ls-files --error-unmatch upstreamhash.txt modversion.txt >/dev/null
+perl -0ne 'exit(/\A[0-9a-f]{40}\n\z/ ? 0 : 1)' upstreamhash.txt || {
+  echo "upstreamhash.txt must contain exactly one full lowercase upstream SHA line" >&2
+  exit 1
+}
+perl -0ne 'exit(/\A[1-9][0-9]*\n\z/ ? 0 : 1)' modversion.txt || {
+  echo "modversion.txt must contain exactly one positive decimal integer line" >&2
+  exit 1
+}
+upstream_sha="$(sed -n '1p' upstreamhash.txt)"
+mod_version="$(sed -n '1p' modversion.txt)"
+upstream_short="$(printf '%s' "${upstream_sha}" | cut -c1-5)"
+version="${base_series}.${upstream_short}.${mod_version}.mod"
 ```
 
-Do not use `git rev-parse --short=5 HEAD` for `xxxxx`: Git may print more than five characters to keep the abbreviation unique, but this release contract requires the literal first five characters.
+Do not use the final release commit SHA, `git rev-parse --short`, or the upstream SemVer patch component as version inputs. The release suffix comes only from checked-in `upstreamhash.txt` and `modversion.txt`.
 
 Use the exact `version` value for:
 
-- The Git tag.
+- The annotated Git tag.
+- The pushed tag ref.
+- The GitHub release tag argument.
 - The GitHub release title.
 - Release notes and final reporting.
 
@@ -72,8 +87,19 @@ Run these checks before creating any tag or release:
 ```bash
 git status --short
 git rev-parse --verify HEAD
-git rev-parse -q --verify "refs/tags/${version}"
-git ls-remote --tags origin "refs/tags/${version}"
+git ls-files --error-unmatch upstreamhash.txt modversion.txt >/dev/null
+git diff --quiet -- upstreamhash.txt modversion.txt
+git diff --cached --quiet -- upstreamhash.txt modversion.txt
+perl -0ne 'exit(/\A[0-9a-f]{40}\n\z/ ? 0 : 1)' upstreamhash.txt
+perl -0ne 'exit(/\A[1-9][0-9]*\n\z/ ? 0 : 1)' modversion.txt
+if git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
+  echo "local tag already exists: ${version}" >&2
+  exit 1
+fi
+if git ls-remote --exit-code --tags origin "refs/tags/${version}" >/dev/null; then
+  echo "remote tag already exists: ${version}" >&2
+  exit 1
+fi
 if gh release view "${version}" --repo garyfpga/codex-compact-fix >/dev/null 2>&1; then
   echo "release already exists: ${version}" >&2
   exit 1
@@ -84,6 +110,7 @@ test -x codex
 
 Stop if:
 
+- `upstreamhash.txt` or `modversion.txt` is absent, untracked, dirty, staged but uncommitted, or fails exact shape validation.
 - A local tag, remote tag, or GitHub release already exists for `version`.
 - The binary is missing from the repository root.
 - The repository-root binary is not exactly `codex`, unless the user explicitly requested a different artifact path.
@@ -100,8 +127,9 @@ Before running `git tag` or `gh release create`, use a `release-packaging-review
 
 Ask the reviewer to check:
 
-- The computed commit SHA, suffix, version, tag, and artifact path.
+- The computed commit SHA, upstream SHA, mod version, upstream short value, version, tag, and artifact path.
 - The latest stable upstream release was checked and used as the base series.
+- `upstreamhash.txt` and `modversion.txt` are checked in, clean, and valid.
 - The build artifact is repository-root `codex`, executable, and built from final `HEAD`.
 - The TUI display label matches the latest upstream SemVer release plus `+gary`, unless the user explicitly approved a different display label.
 - The local tag, remote tag, and GitHub release do not already exist.
@@ -133,17 +161,13 @@ Use the approved release notes file in place of `${notes_file}`. Preserve shell 
 
 If `git tag`, `git push`, or `gh release create` partially succeeds and a later step fails, do not retry blindly. Inspect whether the tag or release exists locally or remotely, report the partial state, and ask for explicit recovery instructions.
 
-## Self-Referential Version Caveat
-
-The version includes the final commit SHA. Do not commit source text, docs, generated metadata, or other tracked files that embed `base.xxxxx.mod` into the same commit whose SHA is used to compute `xxxxx`; that is self-referential and changes the SHA being embedded.
-
-If a tracked file must mention the final SHA-derived version, do it in a later commit or in release notes outside the final source commit. For this publish step, prefer naming the binary after the final commit is fixed, then tag and publish that commit.
-
 ## Completion Report
 
 Report:
 
 - Final commit SHA.
+- Upstream SHA from `upstreamhash.txt`.
+- Mod version from `modversion.txt`.
 - Computed version/tag.
 - Latest upstream stable release used for the base series.
 - Uploaded artifact path/name.

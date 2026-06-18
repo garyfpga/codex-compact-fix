@@ -5,7 +5,7 @@ description: "Use this skill when asked to check whether pulling upstream Codex 
 
 # Mod Refresh Preflight
 
-Run this skill before refreshing the compact-fix fork against upstream Codex. It fetches `upstream/main`, performs only non-mutating analysis, maps upstream changes against `docs/compact-fix/ChangeLog.md`, and reports whether release work should proceed.
+Run this skill before refreshing the compact-fix fork against upstream Codex. It fetches `upstream/main`, performs only non-mutating analysis, records the upstream target SHA, maps upstream changes against `docs/compact-fix/ChangeLog.md`, and reports whether release work should proceed.
 
 This skill is report-only upstream risk analysis. It must not merge, build, tag, publish, invoke `mod-refresh-release`, invoke `mod-refresh-full-release`, or mutate release state. For a complete upstream refresh release, use `$mod-refresh-full-release`.
 
@@ -20,6 +20,8 @@ This skill is report-only upstream risk analysis. It must not merge, build, tag,
 
 1. Fetch upstream:
    - Run `git fetch upstream main:refs/remotes/upstream/main`.
+   - Run `git rev-parse upstream/main` and report the result explicitly as the `upstream target SHA`.
+   - Treat the `upstream target SHA` as the expected future `upstreamhash.txt` value for any follow-on refresh release.
    - If `upstream` is missing or the fetch fails, stop and report the blocker.
 
 2. Check the worktree:
@@ -60,10 +62,10 @@ When using subagents for this skill, use the same model as main agent and `reaso
 
 Use concise sections:
 
-- `Fetch`: upstream ref fetched, merge base, and any fetch concerns.
+- `Fetch`: upstream ref fetched, `upstream target SHA` from `git rev-parse upstream/main`, merge base, and any fetch concerns.
 - `Worktree`: clean or dirty, with dirty paths if relevant.
 - `Merge simulation`: clean merge or conflict summary, including conflicted files.
 - `Upstream touched files`: grouped by compact-relevant areas and unrelated areas.
 - `Compact impact`: ChangeLog behavior groups affected, risk level, and preservation notes.
 - `Recommendation`: `report-only`, `ready to continue if explicitly requested`, or `blocked`.
-- `Continuation gate`: state that release mutation requires a separate `$mod-refresh-full-release` or `$mod-refresh-release` invocation with a fresh current-session preflight.
+- `Continuation gate`: state that release mutation requires a separate `$mod-refresh-full-release` or `$mod-refresh-release` invocation with a fresh current-session preflight that carries the reported `upstream target SHA`.

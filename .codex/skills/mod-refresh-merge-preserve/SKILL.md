@@ -19,9 +19,10 @@ Before mutating the repository:
 2. Confirm the worktree is clean enough for a merge with `git status --short`.
 3. Confirm `upstream` is configured and fetch the target with `git fetch upstream main`.
 4. Read `docs/compact-fix/ChangeLog.md` and treat its Preservation Checklist and Behavior Changes as the source of truth.
-5. Confirm there is a preflight handoff from `$mod-refresh-preflight` or `$mod-refresh-release` that lists the expected upstream overlaps, likely conflicts, and preservation risks.
+5. Confirm there is a preflight handoff from `$mod-refresh-preflight` or `$mod-refresh-release` that lists the upstream target SHA, expected metadata file values, expected upstream overlaps, likely conflicts, and preservation risks.
+6. Confirm the expected `upstreamhash.txt` value is one full 40-character lowercase hex SHA line and the expected `modversion.txt` value is one positive decimal integer line.
 
-Stop before running `git merge` if the branch is unexpected, the worktree has unrelated changes, `upstream/main` cannot be fetched, the ChangeLog is missing, or the preflight handoff is unavailable.
+Stop before running `git merge` if the branch is unexpected, the worktree has unrelated changes, `upstream/main` cannot be fetched, the ChangeLog is missing, the preflight handoff is unavailable, or the handoff metadata values are missing or malformed.
 
 ## Subagent Policy
 
@@ -41,7 +42,10 @@ Give each subagent bounded context: the preflight handoff, the current conflict 
    git status --short
    git remote -v
    git fetch upstream main
+   git rev-parse upstream/main
    ```
+
+   Compare `git rev-parse upstream/main` to the handoff's upstream target SHA. Stop if they differ.
 
 2. Start the real upstream merge:
 
@@ -60,9 +64,16 @@ Give each subagent bounded context: the preflight handoff, the current conflict 
 
 5. Resolve conflicts by preserving the compact-fix contract unless a newer, explicit user-approved plan says otherwise.
 
-6. After conflicts are resolved, run only the non-test maintenance checks needed by touched files. Allowed examples include `just fmt`, schema generation, snapshot review or acceptance when generated UI/text artifacts intentionally changed, and dependency lock maintenance if dependencies changed. Do not run `just test`, `cargo test`, Bazel build commands, Bazel tests, full upstream suites, or focused upstream test commands unless the user, coordinator, or release plan explicitly requests them. Build verification happens in `$mod-refresh-build`; do not run the release build from this skill by default.
+6. After conflicts are resolved, update the refresh metadata files:
+   - Write `upstreamhash.txt` to the actual merged upstream target SHA from `git rev-parse upstream/main`.
+   - Write `modversion.txt` to `1` for a new upstream refresh, unless the invoking handoff records a different explicit approved positive decimal integer.
+   - Verify `upstreamhash.txt` contains exactly one full 40-character lowercase hex upstream SHA line and matches the invoking handoff.
+   - Verify `modversion.txt` contains exactly one positive decimal integer line and matches the invoking handoff.
+   - Stop if either metadata file is missing, malformed, or divergent after the update.
 
-7. Use `compact-preservation-reviewer` on the final diff before reporting completion.
+7. After conflicts and metadata updates are resolved, run only the non-test maintenance checks needed by touched files. Allowed examples include `just fmt`, schema generation, snapshot review or acceptance when generated UI/text artifacts intentionally changed, and dependency lock maintenance if dependencies changed. Do not run `just test`, `cargo test`, Bazel build commands, Bazel tests, full upstream suites, or focused upstream test commands unless the user, coordinator, or release plan explicitly requests them. Build verification happens in `$mod-refresh-build`; do not run the release build from this skill by default.
+
+8. Use `compact-preservation-reviewer` on the final diff before reporting completion.
 
 Do not commit, tag, push, publish, or release from this skill unless the invoking release flow explicitly instructs that step.
 
@@ -79,9 +90,10 @@ Audit every merge resolution and final diff against these ChangeLog items:
 - Preserve V1 user-visible attempt counts, timeout wording, fallback warnings, failure categories, fallback warning counts, and clean-history restore behavior.
 - Preserve V2 policy parity with the shared wrapper, including version-specific attempt budget, timeout semantics, warning labels, request-shape parity where intended, and no hidden stream retries that inflate visible attempts.
 - Preserve compact integration tests, parity tests, config tests, and snapshots as source artifacts whenever request shape, warning text, fallback text, or config behavior changes; test commands are not run by default.
-- Preserve the TUI display-only version label as display-only and aligned with the current mod release base; do not route display surfaces back to `CARGO_PKG_VERSION`.
+- Preserve the TUI display-only version label as display-only and aligned with the metadata-based current mod release version; do not route display surfaces back to `CARGO_PKG_VERSION`.
 - Preserve the Simple Power plan trail under `docs/simplepower/plans/` so future merge agents can read the rationale before changing code.
 - Preserve `docs/compact-fix/ChangeLog.md` itself as the durable behavior map, updating it only when the merge intentionally changes the preserved behavior set.
+- Preserve `upstreamhash.txt` and `modversion.txt` as release metadata: `upstreamhash.txt` stores one full 40-character lowercase hex upstream SHA line, and `modversion.txt` stores one positive decimal integer line.
 
 ## Missed-Risk Stop Condition
 
@@ -92,7 +104,7 @@ Examples include:
 - Upstream rewrote a compact config, retry, fallback, call-site, or TUI version surface that preflight did not identify.
 - A conflict has multiple plausible resolutions and the ChangeLog does not clearly choose one.
 - Preserving the fork behavior would require changing a new upstream API or test contract that was not part of the preflight risk list.
-- Verification reveals request-shape, warning-text, snapshot, schema, or version-label drift that was not anticipated by preflight.
+- Verification reveals request-shape, warning-text, snapshot, schema, metadata-file, or version-label drift that was not anticipated by preflight.
 
 When this happens, do not make a unilateral preservation choice. Leave the worktree in a diagnosable state, report `BLOCKED` or `NEEDS_CONTEXT`, list the file paths and behavior choices, explain why the issue was missed by preflight, and ask for coordinator direction.
 
@@ -101,6 +113,7 @@ When this happens, do not make a unilateral preservation choice. Leave the workt
 Report:
 
 - Current branch and upstream ref merged.
+- Upstream target SHA merged, `upstreamhash.txt` value, and `modversion.txt` value.
 - Conflict files and how each was resolved.
 - Preservation checklist result, including any items not touched.
 - Verification commands and results.

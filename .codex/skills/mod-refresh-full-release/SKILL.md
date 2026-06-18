@@ -23,7 +23,7 @@ Run `$mod-refresh-preflight` first in the current session. Treat preflight as fr
 
 Do not mutate the worktree, merge, build, tag, publish, or invoke `$mod-refresh-release` if preflight is blocked or reports unresolved blockers. Report the blocker and ask for direction.
 
-If preflight recommends ready to continue, invoke `$mod-refresh-release` with a clear current-session handoff.
+If preflight recommends ready to continue, invoke `$mod-refresh-release` with a clear current-session handoff. The preflight must include the `upstream target SHA` from `git rev-parse upstream/main`.
 
 ## Handoff Requirements
 
@@ -31,8 +31,12 @@ Before invoking `$mod-refresh-release`, ensure the handoff or release plan recor
 
 - `Tests: not run unless explicitly requested`
 - `Bazel: not used; using Cargo release build only`
+- Expected `upstreamhash.txt`: the preflight `upstream target SHA`, stored as one full 40-character lowercase hex SHA line.
+- Expected `modversion.txt`: `1` for a new upstream refresh, unless the coordinator records a different explicit approved positive decimal integer.
 
-Include the preflight source, preflight recommendation, upstream ref, current branch, intended release target, expected artifact path `codex`, and any compact-fix preservation risks that `$mod-refresh-release` must carry into its plan.
+Include the preflight source, preflight recommendation, upstream ref, upstream target SHA, current branch, intended release target, expected artifact path `codex`, expected metadata file values, and any compact-fix preservation risks that `$mod-refresh-release` must carry into its plan.
+
+The release suffix must come from the metadata contract: `<first5-upstreamhash>.<modversion>.mod`. Do not hand off wording that derives the suffix from final `HEAD`, `git rev-parse --short`, or the upstream SemVer patch component.
 
 ## Test, Bazel, And Maintenance Policy
 
@@ -51,6 +55,8 @@ Stop before mutation or publishing and ask for direction when any of these occur
 - Build fails or repository-root `codex` is missing.
 - Artifact naming, release tag, release notes source, publish repository, publish destination, or existing release state is ambiguous.
 - The current state diverges from preflight assumptions or the release handoff.
+- The preflight handoff is missing the upstream target SHA or expected metadata values.
+- `upstreamhash.txt` or `modversion.txt` is missing, malformed, or diverges from the handoff before publish.
 - `git tag` succeeds but `gh release create` fails; report the partial tag state and ask for explicit recovery direction.
 
 ## Subagent Policy
@@ -62,4 +68,4 @@ When using subagents for this skill, use the same model as the main agent and `r
 
 ## Completion
 
-Finish with a concise release summary that includes the preflight result, `$mod-refresh-release` handoff, release plan path if created by the release orchestrator, merge result, build result, tag, published artifact name, and any follow-up risks.
+Finish with a concise release summary that includes the preflight result, `$mod-refresh-release` handoff, expected metadata values, release plan path if created by the release orchestrator, merge result, build result, tag, published artifact name, and any follow-up risks.
