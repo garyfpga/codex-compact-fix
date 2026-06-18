@@ -9,7 +9,11 @@ use crate::events::CodexCommandExecutionEventParams;
 use crate::events::CodexCommandExecutionEventRequest;
 use crate::events::CodexCompactionEventRequest;
 use crate::events::CodexHookRunEventRequest;
+use crate::events::CodexOnboardingExternalAgentImportFailureEventRequest;
+use crate::events::CodexOnboardingExternalAgentImportFailureMetadata;
 use crate::events::CodexPluginEventRequest;
+use crate::events::CodexPluginInstallFailedEventRequest;
+use crate::events::CodexPluginInstallFailedMetadata;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexReviewEventParams;
 use crate::events::CodexReviewEventRequest;
@@ -51,10 +55,13 @@ use crate::facts::CompactionStatus;
 use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::ExternalAgentConfigImportCompletedInput;
+use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::InputError;
 use crate::facts::InvocationType;
+use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -178,6 +185,7 @@ fn sample_thread_with_metadata(
         model_provider: "openai".to_string(),
         created_at: 1,
         updated_at: 2,
+        recency_at: Some(2),
         status: AppServerThreadStatus::Idle,
         path: None,
         cwd: test_path_buf("/tmp").abs(),
@@ -823,7 +831,7 @@ fn sample_command_execution_item_with_id(
     ThreadItem::CommandExecution {
         id: id.to_string(),
         command: "echo hi".to_string(),
-        cwd: test_path_buf("/tmp").abs(),
+        cwd: test_path_buf("/tmp").abs().into(),
         process_id: Some("pid-1".to_string()),
         source: CommandExecutionSource::Agent,
         status,
@@ -861,6 +869,7 @@ fn sample_command_approval_request(request_id: i64, approval_id: Option<&str>) -
             item_id: "item-1".to_string(),
             started_at_ms: 1_000,
             approval_id: approval_id.map(str::to_string),
+            environment_id: None,
             reason: None,
             network_approval_context: None,
             command: Some("echo hi".to_string()),
@@ -1987,6 +1996,11 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                     guardian_session_kind: None,
                     guardian_model: None,
                     guardian_reasoning_effort: None,
+                    guardian_default_review_model_id: Some("codex-auto-review".to_string()),
+                    guardian_catalog_contains_auto_review: Some(false),
+                    guardian_review_model_overridden: Some(false),
+                    guardian_review_model_override: None,
+                    guardian_model_provider_id: Some("openai".to_string()),
                     had_prior_review_context: None,
                     review_timeout_ms: 90_000,
                     tool_call_count: None,
@@ -2053,6 +2067,26 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
     assert_eq!(payload[0]["event_params"]["failure_reason"], "timeout");
     assert_eq!(payload[0]["event_params"]["attempt_count"], 1);
     assert_eq!(payload[0]["event_params"]["review_timeout_ms"], 90_000);
+    assert_eq!(
+        payload[0]["event_params"]["guardian_default_review_model_id"],
+        "codex-auto-review"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["guardian_catalog_contains_auto_review"],
+        false
+    );
+    assert_eq!(
+        payload[0]["event_params"]["guardian_review_model_overridden"],
+        false
+    );
+    assert_eq!(
+        payload[0]["event_params"]["guardian_review_model_override"],
+        json!(null)
+    );
+    assert_eq!(
+        payload[0]["event_params"]["guardian_model_provider_id"],
+        "openai"
+    );
 }
 
 #[tokio::test]
@@ -3028,6 +3062,36 @@ fn plugin_management_event_serializes_expected_shape() {
 }
 
 #[test]
+fn plugin_install_failed_event_serializes_expected_shape() {
+    let event = TrackEventRequest::PluginInstallFailed(CodexPluginInstallFailedEventRequest {
+        event_type: "codex_plugin_install_failed",
+        event_params: CodexPluginInstallFailedMetadata {
+            plugin: codex_plugin_metadata(sample_plugin_metadata()),
+            error_type: "store_io".to_string(),
+        },
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize plugin install failed event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_plugin_install_failed",
+            "event_params": {
+                "plugin_id": "sample@test",
+                "plugin_name": "sample",
+                "marketplace_name": "test",
+                "has_skills": true,
+                "mcp_server_count": 2,
+                "connector_ids": ["calendar", "drive"],
+                "product_client_id": originator().value,
+                "error_type": "store_io"
+            }
+        })
+    );
+}
+
+#[test]
 fn plugin_management_event_can_use_remote_plugin_id_override() {
     let mut plugin = sample_plugin_metadata();
     plugin.remote_plugin_id = Some("plugins~Plugin_remote".to_string());
@@ -3389,6 +3453,190 @@ async fn reducer_ingests_plugin_state_changed_fact() {
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_plugin_install_failed_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginInstallFailed(
+                PluginInstallFailedInput {
+                    plugin: sample_plugin_metadata(),
+                    error_type: "invalid_plugin".to_string(),
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_plugin_install_failed",
+            "event_params": {
+                "plugin_id": "sample@test",
+                "plugin_name": "sample",
+                "marketplace_name": "test",
+                "has_skills": true,
+                "mcp_server_count": 2,
+                "connector_ids": ["calendar", "drive"],
+                "product_client_id": originator().value,
+                "error_type": "invalid_plugin"
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let mut plugin = PluginTelemetryMetadata::from_plugin_id(
+        &PluginId::parse("unknown@openai-curated-remote").expect("valid plugin id"),
+    );
+    plugin.remote_plugin_id = Some("plugins~Plugin_00000000000000000000000000000000".to_string());
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginInstallFailed(
+                PluginInstallFailedInput {
+                    plugin,
+                    error_type: "remote_catalog_unexpected_status".to_string(),
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_plugin_install_failed",
+            "event_params": {
+                "plugin_id": "plugins~Plugin_00000000000000000000000000000000",
+                "plugin_name": "unknown",
+                "marketplace_name": "openai-curated-remote",
+                "has_skills": null,
+                "mcp_server_count": null,
+                "connector_ids": null,
+                "product_client_id": originator().value,
+                "error_type": "remote_catalog_unexpected_status"
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_external_agent_config_import_completed_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ExternalAgentConfigImportCompleted(
+                ExternalAgentConfigImportCompletedInput {
+                    import_id: "import-1".to_string(),
+                    source: "app_server".to_string(),
+                    item_type: "PLUGINS".to_string(),
+                    success_count: 2,
+                    failed_count: 1,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_onboarding_external_agent_import_complete",
+            "event_params": {
+                "import_id": "import-1",
+                "source": "app_server",
+                "type": "PLUGINS",
+                "success_count": 2,
+                "failed_count": 1,
+                "product_client_id": originator().value,
+            }
+        }])
+    );
+}
+
+#[test]
+fn external_agent_config_import_failure_event_serializes_expected_shape() {
+    let event = TrackEventRequest::ExternalAgentConfigImportFailure(
+        CodexOnboardingExternalAgentImportFailureEventRequest {
+            event_type: "codex_onboarding_external_agent_import_failure",
+            event_params: CodexOnboardingExternalAgentImportFailureMetadata {
+                import_id: "import-1".to_string(),
+                source: "app_server".to_string(),
+                item_type: "SESSIONS".to_string(),
+                failure_stage: "session_missing".to_string(),
+                error_type: "session_missing".to_string(),
+                product_client_id: Some(originator().value),
+            },
+        },
+    );
+
+    let payload = serde_json::to_value(&event).expect("serialize import failure event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_onboarding_external_agent_import_failure",
+            "event_params": {
+                "import_id": "import-1",
+                "source": "app_server",
+                "type": "SESSIONS",
+                "failure_stage": "session_missing",
+                "error_type": "session_missing",
+                "product_client_id": originator().value,
+            }
+        })
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_external_agent_config_import_failure_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ExternalAgentConfigImportFailure(
+                ExternalAgentConfigImportFailureInput {
+                    import_id: "import-1".to_string(),
+                    source: "app_server".to_string(),
+                    item_type: "SESSIONS".to_string(),
+                    failure_stage: "session_missing".to_string(),
+                    error_type: "session_missing".to_string(),
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_onboarding_external_agent_import_failure",
+            "event_params": {
+                "import_id": "import-1",
+                "source": "app_server",
+                "type": "SESSIONS",
+                "failure_stage": "session_missing",
+                "error_type": "session_missing",
+                "product_client_id": originator().value,
             }
         }])
     );
@@ -3863,6 +4111,32 @@ async fn turn_event_counts_completed_tool_items() {
     )
     .await;
 
+    let mcp_tool_call_item = |status, duration_ms| ThreadItem::McpToolCall {
+        id: "mcp-1".to_string(),
+        server: "server".to_string(),
+        tool: "search".to_string(),
+        status,
+        arguments: json!({}),
+        mcp_app_resource_uri: None,
+        plugin_id: Some("sample@test".to_string()),
+        result: None,
+        error: None,
+        duration_ms,
+    };
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
+                ItemStartedNotification {
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    started_at_ms: 998,
+                    item: mcp_tool_call_item(McpToolCallStatus::InProgress, None),
+                },
+            ))),
+            &mut out,
+        )
+        .await;
+
     let completed_tool_items = vec![
         sample_command_execution_item(CommandExecutionStatus::Completed, Some(0), Some(1)),
         ThreadItem::FileChange {
@@ -3870,18 +4144,7 @@ async fn turn_event_counts_completed_tool_items() {
             changes: Vec::new(),
             status: PatchApplyStatus::Completed,
         },
-        ThreadItem::McpToolCall {
-            id: "mcp-1".to_string(),
-            server: "server".to_string(),
-            tool: "search".to_string(),
-            status: McpToolCallStatus::Completed,
-            arguments: json!({}),
-            mcp_app_resource_uri: None,
-            plugin_id: None,
-            result: None,
-            error: None,
-            duration_ms: Some(2),
-        },
+        mcp_tool_call_item(McpToolCallStatus::Completed, Some(2)),
         ThreadItem::DynamicToolCall {
             id: "dynamic-1".to_string(),
             namespace: None,
@@ -3938,6 +4201,13 @@ async fn turn_event_counts_completed_tool_items() {
             )
             .await;
     }
+
+    let mcp_tool_call_event = out
+        .iter()
+        .find(|event| matches!(event, TrackEventRequest::McpToolCall(_)))
+        .expect("MCP tool call event should be emitted");
+    let payload = serde_json::to_value(mcp_tool_call_event).expect("serialize MCP tool call event");
+    assert_eq!(payload["event_params"]["plugin_id"], json!("sample@test"));
 
     reducer
         .ingest(

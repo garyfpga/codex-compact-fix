@@ -234,9 +234,13 @@ async fn run_remote_attempt(
     let attempt_timeout = turn_context.config.remote_compact.attempt_timeout;
     match version {
         RemoteCompactVersion::V1 => {
+            let turn_state = client_session
+                .as_ref()
+                .map(|client_session| client_session.turn_state());
             compact_remote::run_remote_compact_task_for_mode(
                 sess,
                 turn_context,
+                turn_state,
                 initial_context_injection,
                 trigger,
                 reason,
@@ -303,7 +307,12 @@ async fn run_local_fallback(
         }
         RemoteCompactKind::Manual => {
             let input = vec![UserInput::Text {
-                text: turn_context.compact_prompt().to_string(),
+                text: turn_context
+                    .config
+                    .compact_prompt
+                    .as_deref()
+                    .unwrap_or(crate::compact::SUMMARIZATION_PROMPT)
+                    .to_string(),
                 // Compaction prompt is synthesized; no UI element ranges to preserve.
                 text_elements: Vec::new(),
             }];

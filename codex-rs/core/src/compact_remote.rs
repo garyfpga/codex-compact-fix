@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::Prompt;
@@ -13,10 +14,12 @@ use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
+use crate::responses_metadata::CodexResponsesMetadata;
+use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
-use crate::turn_metadata::CompactionTurnMetadata;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -54,6 +57,7 @@ pub(crate) struct RemoteCompactionRunSettings {
 pub(crate) async fn run_remote_compact_task_for_mode(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    turn_state: Option<Arc<OnceLock<String>>>,
     initial_context_injection: InitialContextInjection,
     trigger: CompactionTrigger,
     reason: CompactionReason,
@@ -98,6 +102,7 @@ pub(crate) async fn run_remote_compact_task_for_mode(
     let result = run_remote_compact_task_inner_impl(
         sess,
         turn_context,
+        turn_state,
         initial_context_injection,
         compaction_metadata,
         &mut analytics_details,
@@ -125,6 +130,7 @@ pub(crate) async fn run_remote_compact_task_for_mode(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    turn_state: Option<Arc<OnceLock<String>>>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
     analytics_details: &mut CompactionAnalyticsDetails,
@@ -189,16 +195,18 @@ async fn run_remote_compact_task_inner_impl(
         output_schema_strict: true,
     };
     let window_id = sess.current_window_id().await;
-    let turn_metadata_header = turn_context
-        .turn_metadata_state
-        .current_header_value_for_compaction(&window_id, compaction_metadata);
+    let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+        sess.installation_id.clone(),
+        window_id,
+        CodexResponsesRequestKind::Compaction(compaction_metadata),
+    );
     let mut new_history = run_remote_compaction_request_v1(
         sess,
         turn_context,
+        turn_state,
         &prompt,
         &compaction_trace,
-        &window_id,
-        turn_metadata_header.as_deref(),
+        &responses_metadata,
         settings,
     )
     .await?;
@@ -239,10 +247,10 @@ async fn run_remote_compact_task_inner_impl(
 async fn run_remote_compaction_request_v1(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    turn_state: Option<Arc<OnceLock<String>>>,
     prompt: &Prompt,
     compaction_trace: &CompactionTraceContext,
-    window_id: &str,
-    turn_metadata_header: Option<&str>,
+    responses_metadata: &CodexResponsesMetadata,
     settings: &RemoteCompactionRunSettings,
 ) -> CodexResult<Vec<ResponseItem>> {
     let total_attempts = settings.max_attempts;
@@ -271,6 +279,7 @@ async fn run_remote_compaction_request_v1(
             .compact_conversation_history(
                 prompt,
                 &turn_context.model_info,
+                turn_state.clone(),
                 CompactConversationRequestSettings {
                     effort: turn_context.reasoning_effort.clone(),
                     summary: turn_context.reasoning_summary,
@@ -289,8 +298,7 @@ async fn run_remote_compaction_request_v1(
                 },
                 &turn_context.session_telemetry,
                 compaction_trace,
-                window_id,
-                turn_metadata_header,
+                responses_metadata,
             )
             .await;
 
@@ -518,7 +526,7 @@ pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         ResponseItem::Message { .. } => false,
         ResponseItem::AgentMessage { .. } => true,
         ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => true,
-        ResponseItem::CompactionTrigger => false,
+        ResponseItem::CompactionTrigger { .. } => false,
         ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
@@ -577,29 +585,43 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
 
 fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseItem> {
     Some(match item {
-        ResponseItem::FunctionCallOutput { call_id, output } => ResponseItem::FunctionCallOutput {
+        ResponseItem::FunctionCallOutput {
+            id,
+            call_id,
+            output,
+            metadata,
+        } => ResponseItem::FunctionCallOutput {
+            id: id.clone(),
             call_id: call_id.clone(),
             output: truncated_output_payload(output),
+            metadata: metadata.clone(),
         },
         ResponseItem::CustomToolCallOutput {
+            id,
             call_id,
             name,
             output,
+            metadata,
         } => ResponseItem::CustomToolCallOutput {
+            id: id.clone(),
             call_id: call_id.clone(),
             name: name.clone(),
             output: truncated_output_payload(output),
+            metadata: metadata.clone(),
         },
         ResponseItem::ToolSearchOutput {
             call_id,
             status,
             execution,
+            metadata,
             ..
         } => ResponseItem::ToolSearchOutput {
+            id: item.id().map(str::to_string),
             call_id: call_id.clone(),
             status: status.clone(),
             execution: execution.clone(),
             tools: Vec::new(),
+            metadata: metadata.clone(),
         },
         _ => return None,
     })

@@ -18,10 +18,12 @@ use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
+use crate::responses_metadata::CodexResponsesMetadata;
+use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
-use crate::turn_metadata::CompactionTurnMetadata;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -184,7 +186,10 @@ async fn run_remote_compact_task_inner_impl(
     )
     .await?;
     let mut input = prompt_input.clone();
-    input.push(ResponseItem::CompactionTrigger);
+    input.push(ResponseItem::CompactionTrigger {
+        id: None,
+        metadata: None,
+    });
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),
@@ -196,9 +201,11 @@ async fn run_remote_compact_task_inner_impl(
     };
 
     let window_id = sess.current_window_id().await;
-    let turn_metadata_header = turn_context
-        .turn_metadata_state
-        .current_header_value_for_compaction(&window_id, compaction_metadata);
+    let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+        sess.installation_id.clone(),
+        window_id,
+        CodexResponsesRequestKind::Compaction(compaction_metadata),
+    );
     let mut owned_client_session;
     let client_session = match client_session {
         Some(client_session) => client_session,
@@ -213,8 +220,7 @@ async fn run_remote_compact_task_inner_impl(
         client_session,
         &prompt,
         &compaction_trace,
-        &window_id,
-        turn_metadata_header.as_deref(),
+        &responses_metadata,
         settings,
     )
     .await;
@@ -273,8 +279,7 @@ async fn run_remote_compaction_request_v2(
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
     compaction_trace: &CompactionTraceContext,
-    window_id: &str,
-    turn_metadata_header: Option<&str>,
+    responses_metadata: &CodexResponsesMetadata,
     settings: &RemoteCompactionV2RunSettings,
 ) -> CodexResult<RemoteCompactionV2Output> {
     let total_attempts = settings.max_attempts;
@@ -307,14 +312,13 @@ async fn run_remote_compaction_request_v2(
         let result = match tokio::time::timeout(attempt_timeout, async {
             match client_session
                 .stream(
-                    window_id,
                     prompt,
                     &turn_context.model_info,
                     &turn_context.session_telemetry,
                     turn_context.reasoning_effort.clone(),
                     turn_context.reasoning_summary,
                     service_tier,
-                    turn_metadata_header,
+                    responses_metadata,
                     &InferenceTraceContext::disabled(),
                 )
                 .await
@@ -503,6 +507,7 @@ fn truncate_message_text_to_token_budget(
         role,
         content,
         phase,
+        metadata,
     } = item
     else {
         return Some(item);
@@ -541,6 +546,7 @@ fn truncate_message_text_to_token_budget(
         role,
         content: truncated_content,
         phase,
+        metadata,
     })
 }
 
@@ -561,6 +567,7 @@ mod tests {
                 text: text.to_string(),
             }],
             phase,
+            metadata: None,
         }
     }
 
@@ -592,13 +599,18 @@ mod tests {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call_1".to_string(),
+                metadata: None,
             },
             ResponseItem::Compaction {
+                id: None,
                 encrypted_content: "old".to_string(),
+                metadata: None,
             },
         ];
         let output = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "new".to_string(),
+            metadata: None,
         };
 
         let (history, _) = build_v2_compacted_history(&input, output.clone());
@@ -625,7 +637,9 @@ mod tests {
             new.clone(),
         ];
         let output = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "new".to_string(),
+            metadata: None,
         };
 
         let (history, _) = build_v2_compacted_history(&input, output.clone());
@@ -652,9 +666,12 @@ mod tests {
                 },
             ],
             phase: None,
+            metadata: None,
         }];
         let output = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "new".to_string(),
+            metadata: None,
         };
 
         let (_, retained_image_count) = build_v2_compacted_history(&input, output);
@@ -702,6 +719,7 @@ mod tests {
                 },
             ],
             phase: None,
+            metadata: None,
         };
 
         let truncated =
@@ -725,6 +743,7 @@ mod tests {
                     },
                 ],
                 phase: None,
+                metadata: None,
             }]
         );
     }
@@ -739,6 +758,7 @@ mod tests {
                 detail: None,
             }],
             phase: None,
+            metadata: None,
         };
         let newest = message("user", "new", /*phase*/ None);
         let retained = vec![
@@ -763,6 +783,7 @@ mod tests {
                 detail: None,
             }],
             phase: None,
+            metadata: None,
         };
         let newest = message("user", "new", /*phase*/ None);
         let retained = vec![image_only_message, newest.clone()];
@@ -776,7 +797,9 @@ mod tests {
     #[tokio::test]
     async fn collect_compaction_output_accepts_additional_output_items() {
         let compaction = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "encrypted".to_string(),
+            metadata: None,
         };
         let stream = response_stream(vec![
             Ok(ResponseEvent::OutputItemDone(message(
