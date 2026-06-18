@@ -18,7 +18,7 @@ The inventory below intentionally excludes `docs/compact-fix/ChangeLog.md` and `
 - Keep V1 visible attempt counts, timeout wording, fallback warnings, and clean-history restore behavior stable.
 - Keep V2 policy parity with the shared wrapper, including the version-specific attempt budget and warning labels.
 - Keep the compact integration tests and snapshots current whenever request shape or fallback text changes.
-- Keep the TUI version label display-only and aligned with the current mod release base, currently `0.141.0+gary`.
+- Keep the TUI version label display-only and aligned with `CODEX_CLI_RELEASE_VERSION`, preserving binary/TUI `.mod` version consistency with Cargo package fallback for local builds.
 - Keep the Simple Power plan trail intact so future merge agents can read the rationale before changing code.
 
 ## Behavior Changes
@@ -219,7 +219,7 @@ These are the guardrails future merge agents need. Compact regressions tend to s
 - Rerun the focused compact tests after any merge conflict resolution in these files.
 - Keep the parity test normalization aligned with intentional V1/V2 differences only.
 
-### 9. Display-only TUI version label `0.141.0+gary`
+### 9. Release-env-aware TUI version label and metadata-based `.mod` display
 **Files**
 - `codex-rs/tui/src/version.rs`
 - `codex-rs/tui/src/chatwidget/status_surfaces.rs`
@@ -235,14 +235,15 @@ These are the guardrails future merge agents need. Compact regressions tend to s
 - `codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__status_surface_previews_codex_version.snap:1-6`
 
 **What changed**
-`CODEX_CLI_DISPLAY_VERSION` now holds `0.141.0+gary`, and both the status line and terminal title preview route `CodexVersion` to that display-only constant. The preview placeholder and snapshot test follow the same label.
+`CODEX_CLI_RELEASE_VERSION` now feeds both `CODEX_CLI_VERSION` and `CODEX_CLI_DISPLAY_VERSION`, with Cargo package metadata as the local-build fallback. The status line and terminal title preview route `CodexVersion` to that release-env-aware `.mod` value, and the preview placeholder and snapshot test follow the same label.
 
 **Why**
-The fork wants a visible version label that can differ from package metadata without altering release checks or external version behavior.
+The fork wants a visible version label that stays in sync between the binary and TUI for release builds, while still falling back to Cargo package metadata for local builds without altering external version behavior.
 
 **Future merge notes**
 - Never swap the TUI display path back to `CARGO_PKG_VERSION`.
-- Keep the snapshot updated if the display label intentionally changes, including when the mod release base advances with upstream stable releases.
+- Keep binary/TUI `.mod` version display synchronized through `CODEX_CLI_RELEASE_VERSION`, with Cargo package metadata as the local-build fallback.
+- Keep the snapshot updated if the display label intentionally changes, including when the metadata-based `.mod` release value advances with upstream stable releases.
 - Preserve the separation between display-only UI copy and package metadata.
 
 ### 10. Simple Power plan history as the rationale trail
@@ -312,8 +313,8 @@ A	docs/simplepower/plans/2026-06-11-upstream-main-compact-preserve-gary-version.
 1. Re-read this changelog before touching any compact or TUI version files.
 2. Re-run the baseline inventory command `git diff --name-status f42780109c..b722574da3` and compare it to the inventory section above.
 3. Resolve overlaps in this order: config/schema, shared fallback routing, V1 runtime plumbing, V2 parity, tests/snapshots, TUI display label.
-4. Preserve the compact-only fast-tier override and the display-only version label unless a new approved plan explicitly changes them.
+4. Preserve the compact-only fast-tier override and the binary/TUI `.mod` version consistency unless a new approved plan explicitly changes them.
 5. If a merge changes any `ConfigToml` or `remote_compact` shape, regenerate the schema before claiming the merge is done.
 6. If a merge changes request shape or warning text, update the compact tests and snapshots in the same change.
-7. If a merge touches the TUI version label, update the display snapshot and keep the label display-only.
+7. If a merge touches the TUI version label or release metadata path, update the display snapshot and keep binary/TUI `.mod` version consistency.
 8. After the merge is stable, update this changelog so the next agent starts from the current fork delta instead of a stale summary.

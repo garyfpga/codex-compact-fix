@@ -820,11 +820,13 @@ struct ProjectTrustContext {
     repo_root_key: Option<String>,
     repo_root_lookup_keys: Option<Vec<String>>,
     projects_trust: std::collections::HashMap<String, TrustLevel>,
+    dangerously_trust_all_projects: bool,
     user_config_file: AbsolutePathBuf,
 }
 
 #[derive(Deserialize)]
 struct ProjectTrustConfigToml {
+    dangerously_trust_all_projects: Option<bool>,
     projects: Option<std::collections::HashMap<String, ProjectConfig>>,
 }
 
@@ -876,12 +878,20 @@ impl ProjectTrustContext {
             }
         }
 
+        let trust_key = self
+            .repo_root_key
+            .clone()
+            .unwrap_or_else(|| self.project_root_key.clone());
+        if self.dangerously_trust_all_projects {
+            return ProjectTrustDecision {
+                trust_level: Some(TrustLevel::Trusted),
+                trust_key,
+            };
+        }
+
         ProjectTrustDecision {
             trust_level: None,
-            trust_key: self
-                .repo_root_key
-                .clone()
-                .unwrap_or_else(|| self.project_root_key.clone()),
+            trust_key,
         }
     }
 
@@ -988,6 +998,9 @@ async fn project_trust_context(
     };
 
     let project_root = find_project_root(fs, cwd, project_root_markers).await?;
+    let dangerously_trust_all_projects = project_trust_config
+        .dangerously_trust_all_projects
+        .unwrap_or(false);
     let projects = project_trust_config.projects.unwrap_or_default();
 
     let project_root_lookup_keys = normalized_project_trust_keys(project_root.as_path());
@@ -1018,6 +1031,7 @@ async fn project_trust_context(
         repo_root_key,
         repo_root_lookup_keys,
         projects_trust,
+        dangerously_trust_all_projects,
         user_config_file: user_config_file.clone(),
     })
 }

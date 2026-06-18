@@ -73,11 +73,16 @@ codex
 
 Upload `codex` as the GitHub release asset. The tag and release title carry the version; the asset name stays stable across releases.
 
-If the repository has a display-only TUI version label, verify that it matches the latest upstream SemVer release with the fork suffix before publishing. For example, latest `0.141.0` requires `0.141.0+gary` unless the user explicitly approved a different display label:
+Verify that the repository-root artifact exists, is executable, and reports the computed metadata release version before publishing:
 
 ```bash
-expected_display_version="${base_semver}+gary"
-rg -n "CODEX_CLI_DISPLAY_VERSION.*${expected_display_version}" codex-rs/tui/src/version.rs
+test -f codex
+test -x codex
+version_output="$(./codex --version)"
+if [ "${version_output}" != "codex-cli ${version}" ]; then
+  echo "repo-root codex reports unexpected version: ${version_output}" >&2
+  exit 1
+fi
 ```
 
 ## Safety Checks
@@ -122,6 +127,11 @@ else
 fi
 test -f codex
 test -x codex
+version_output="$(./codex --version)"
+if [ "${version_output}" != "codex-cli ${version}" ]; then
+  echo "repo-root codex reports unexpected version: ${version_output}" >&2
+  exit 1
+fi
 ```
 
 Stop if:
@@ -131,7 +141,7 @@ Stop if:
 - The remote tag or GitHub release absence check cannot distinguish missing state from an authentication, permission, network, or API error.
 - The binary is missing from the repository root.
 - The repository-root binary is not exactly `codex`, unless the user explicitly requested a different artifact path.
-- The display-only TUI version label is stale relative to the latest upstream stable SemVer release.
+- The repository-root binary is not executable or `./codex --version` does not report exactly `codex-cli ${version}`.
 - The release notes are unclear, stale, or not approved.
 - The `gh` repository target is unclear.
 - The publish command would overwrite or attach to unclear existing state.
@@ -148,7 +158,7 @@ Ask the reviewer to check:
 - The latest stable upstream release was checked and used as the base series.
 - `upstreamhash.txt` and `modversion.txt` are checked in, clean, and valid.
 - The build artifact is repository-root `codex`, executable, and built from final `HEAD`.
-- The TUI display label matches the latest upstream SemVer release plus `+gary`, unless the user explicitly approved a different display label.
+- The build embedded the metadata-based `.mod` version through `CODEX_CLI_RELEASE_VERSION`, and `./codex --version` reports exactly `codex-cli ${version}`.
 - The local tag, remote tag, and GitHub release do not already exist.
 - The release notes and GitHub repository target are explicit.
 - The publish commands will not overwrite unclear state.

@@ -2,5 +2,5 @@
 source: tui/src/chatwidget/tests/status_surface_previews.rs
 expression: snapshot
 ---
-status line: 0.141.0+gary
-terminal title: 0.141.0+gary
+status line: 0.0.0
+terminal title: 0.0.0

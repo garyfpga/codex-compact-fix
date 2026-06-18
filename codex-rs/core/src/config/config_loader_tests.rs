@@ -2793,6 +2793,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     let project_root = tmp.path().join("project");
     let nested = project_root.join("child");
     tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
         r#"foo = "child"
@@ -2818,6 +2819,7 @@ profile = "ignored"
         &untrusted_config_path,
         format!(
             r#"foo = "user"
+dangerously_trust_all_projects = true
 {untrusted_config_contents}"#
         ),
     )
@@ -2904,6 +2906,61 @@ profile = "ignored"
         Some(&TomlValue::String("user".to_string()))
     );
     assert_eq!(layers_unknown.startup_warnings(), Some(empty_warnings));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn unknown_project_layer_enabled_when_trust_all() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        r#"foo = "child"
+"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"foo = "user"
+dangerously_trust_all_projects = true
+"#,
+    )
+    .await?;
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(&nested)?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 1);
+    assert_eq!(project_layers[0].disabled_reason.as_deref(), None);
+    assert_eq!(
+        project_layers[0].config.get("foo"),
+        Some(&TomlValue::String("child".to_string()))
+    );
+    assert_eq!(
+        layers.effective_config().get("foo"),
+        Some(&TomlValue::String("child".to_string()))
+    );
 
     Ok(())
 }
@@ -3247,7 +3304,8 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
         assert_eq!(
             project_layers.len(),
             1,
-            "expected one project layer for {name}"
+            "expected one project layer for {}",
+            name,
         );
         assert!(
             project_layers[0].disabled_reason.is_some(),
@@ -3276,21 +3334,61 @@ async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    struct Case {
+        name: &'static str,
+        trust_level: Option<TrustLevel>,
+        dangerously_trust_all_projects: bool,
+        expect_disabled: bool,
+    }
+
     let cases = [
-        ("untrusted", Some(TrustLevel::Untrusted), true),
-        ("unknown", None, true),
-        ("trusted", Some(TrustLevel::Trusted), false),
+        Case {
+            name: "untrusted",
+            trust_level: Some(TrustLevel::Untrusted),
+            dangerously_trust_all_projects: false,
+            expect_disabled: true,
+        },
+        Case {
+            name: "unknown",
+            trust_level: None,
+            dangerously_trust_all_projects: false,
+            expect_disabled: true,
+        },
+        Case {
+            name: "trusted",
+            trust_level: Some(TrustLevel::Trusted),
+            dangerously_trust_all_projects: false,
+            expect_disabled: false,
+        },
+        Case {
+            name: "trust_all",
+            trust_level: None,
+            dangerously_trust_all_projects: true,
+            expect_disabled: false,
+        },
     ];
 
-    for (name, trust_level, expect_disabled) in cases {
-        let codex_home = tmp.path().join(format!("home_no_config_{name}"));
+    for case in cases {
+        let codex_home = tmp.path().join(format!("home_no_config_{}", case.name));
         tokio::fs::create_dir_all(&codex_home).await?;
-        if let Some(trust_level) = trust_level {
-            make_config_for_test(
-                &codex_home,
-                &project_root,
-                trust_level,
-                /*project_root_markers*/ None,
+        if case.trust_level.is_some() || case.dangerously_trust_all_projects {
+            tokio::fs::write(
+                codex_home.join(CONFIG_TOML_FILE),
+                toml::to_string(&ConfigToml {
+                    dangerously_trust_all_projects: case
+                        .dangerously_trust_all_projects
+                        .then_some(true),
+                    projects: case.trust_level.map(|trust_level| {
+                        HashMap::from([(
+                            project_root.to_string_lossy().to_string(),
+                            ProjectConfig {
+                                trust_level: Some(trust_level),
+                            },
+                        )])
+                    }),
+                    ..Default::default()
+                })
+                .expect("serialize config"),
             )
             .await?;
         }
@@ -3315,12 +3413,14 @@ async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown
         assert_eq!(
             project_layers.len(),
             1,
-            "expected one project layer for {name}"
+            "expected one project layer for {}",
+            case.name,
         );
         assert_eq!(
             project_layers[0].disabled_reason.is_some(),
-            expect_disabled,
-            "unexpected disabled state for {name}",
+            case.expect_disabled,
+            "unexpected disabled state for {}",
+            case.name,
         );
         assert_eq!(
             project_layers[0].config,

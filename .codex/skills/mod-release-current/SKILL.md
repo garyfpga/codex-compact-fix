@@ -47,7 +47,7 @@ Run the release chain in this exact order:
 1. `$mod-refresh-build`
 2. `$mod-refresh-publish`
 
-Pass the confirmed current `HEAD`, branch, worktree state, checked-in upstream SHA, checked-in mod version, test/Bazel decisions, release notes source, and GitHub release destination through the handoff context. The build step must use the current checkout as-is. The publish step must derive the base series from the latest stable upstream Codex release, read and validate `upstreamhash.txt` and `modversion.txt`, compute `version="${base_series}.${upstream_short}.${mod_version}.mod"`, and publish only after its packaging and safety gates pass.
+Pass the confirmed current `HEAD`, branch, worktree state, checked-in upstream SHA, checked-in mod version, test/Bazel decisions, release notes source, and GitHub release destination through the handoff context. The build step must use the current checkout as-is, compute the metadata release version from the latest stable upstream base series plus the checked-in metadata files, and embed it with `CODEX_CLI_RELEASE_VERSION="${version}" cargo build -p codex-cli --release`. The publish step must derive the same base series from the latest stable upstream Codex release, read and validate `upstreamhash.txt` and `modversion.txt`, compute `version="${base_series}.${upstream_short}.${mod_version}.mod"`, and publish only after its packaging and safety gates pass.
 
 ## Subagent Policy
 
@@ -59,6 +59,7 @@ Ask the reviewer to verify:
 - `upstreamhash.txt` and `modversion.txt` were checked in, clean, valid, and captured before build.
 - No upstream fetch, preflight, merge simulation, upstream merge, or `$mod-refresh-release` invocation occurred.
 - `$mod-refresh-build` completed first and produced repository-root `codex` for publish.
+- `$mod-refresh-build` embedded the checked-in metadata release version with `CODEX_CLI_RELEASE_VERSION`, and the artifact's `./codex --version` output was captured.
 - The exact test and Bazel decisions were recorded.
 - Release notes source, GitHub release destination, checked-in upstream SHA, checked-in mod version, repo-root `codex` artifact path, and publish readiness are explicit.
 
@@ -74,6 +75,7 @@ Stop and ask for clarification before continuing when any of these are true:
 - `upstreamhash.txt` or `modversion.txt` is missing, untracked, dirty, staged but uncommitted, or fails exact shape validation.
 - Release notes source or GitHub release destination is unclear.
 - Build verification fails, is missing, or produces an unexpected artifact.
+- The build did not embed the checked-in metadata release version through `CODEX_CLI_RELEASE_VERSION`.
 - Artifact path is not repository-root `codex`, unless the user explicitly requested a different path.
 - The packaging reviewer gate cannot run or reports unresolved findings.
 - Any step would require upstream fetch, preflight, merge simulation, upstream merge, or `$mod-refresh-release`.

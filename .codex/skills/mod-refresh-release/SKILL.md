@@ -34,9 +34,10 @@ Include:
 - Expected `upstreamhash.txt` value: the preflight upstream target SHA, as one full 40-character lowercase hex SHA line.
 - Expected `modversion.txt` value: `1` for a new upstream refresh, unless the handoff records a different explicit approved positive decimal integer.
 - Expected release version contract: `<latest-upstream-major>.<latest-upstream-minor>.<first5-upstreamhash>.<modversion>.mod`; do not derive the suffix from final `HEAD`, `git rev-parse --short`, or the upstream SemVer patch component.
+- Computed release version handoff: `version="${base_series}.${upstream_short}.${mod_version}.mod"` must be passed into the build as `CODEX_CLI_RELEASE_VERSION="${version}"`.
 - Ordered execution checklist for merge preservation, build verification, and publish.
 - Local mod preservation risks and files/areas that need special attention.
-- Build command, expected Linux CLI binary path, and verification command/output to capture.
+- Build command `CODEX_CLI_RELEASE_VERSION="${version}" cargo build -p codex-cli --release`, expected Linux CLI binary path, and `./codex --version` output to capture.
 - `Tests: not run unless explicitly requested`.
 - `Bazel: not used; using Cargo release build only`.
 - Publish command or process, tag name, latest-stable upstream release source, release notes source, and artifact upload target.
@@ -61,6 +62,8 @@ After `$mod-refresh-merge-preserve` completes and before continuing to publish, 
 
 Stop if either file is missing, malformed, or divergent from the release plan.
 
+Before invoking `$mod-refresh-build`, compute and record the metadata release version from the latest stable upstream base series plus the checked-in metadata files. Pass that exact value through the build handoff so the build command uses `CODEX_CLI_RELEASE_VERSION="${version}" cargo build -p codex-cli --release`. After build, record the copied artifact's `./codex --version` output and stop before publish unless it is exactly `codex-cli ${version}`.
+
 ## Test, Bazel, And Maintenance Policy
 
 Do not run tests or Bazel build/test commands unless the user explicitly requests them. The release flow uses the Cargo release build path only.
@@ -73,6 +76,7 @@ Stop before publishing and ask for approval or clarification when any of these a
 
 - Merge preservation is incomplete, conflicted, unreviewed, or does not clearly preserve the local mods identified by preflight.
 - Build verification did not run, failed, produced unexpected output, or does not clearly validate the Linux CLI binary.
+- The build handoff does not pass the computed `.mod` version through `CODEX_CLI_RELEASE_VERSION`.
 - Artifact path, release tag base, release notes source, or publish destination is ambiguous.
 - The current state diverges from the preflight assumptions or release plan.
 - The release plan or handoff is missing expected `upstreamhash.txt` or `modversion.txt` values.
