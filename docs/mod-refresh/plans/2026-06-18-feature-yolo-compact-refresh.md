@@ -227,6 +227,6 @@ If `git tag`, `git push`, or `gh release create` partially succeeds and a later 
 - Maintenance: dependency-file gate reported no dependency-file changes; no Bazel lock maintenance needed.
 - Verification: `cd codex-rs && timeout 600s cargo check -p codex-core -p codex-tui -p codex-core-skills -p codex-core-plugins -p codex-plugin` completed successfully.
 - Verification: `git diff --check` over metadata, release plan, and upstream-touched files completed successfully.
-- Merge preservation review: pending.
+- Merge preservation review: PASS.
 - Build: pending.
 - Publish: pending.
