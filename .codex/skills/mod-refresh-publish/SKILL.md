@@ -99,10 +99,26 @@ fi
 if git ls-remote --exit-code --tags origin "refs/tags/${version}" >/dev/null; then
   echo "remote tag already exists: ${version}" >&2
   exit 1
+else
+  ls_remote_status=$?
+  if [ "${ls_remote_status}" -ne 2 ]; then
+    echo "could not confirm remote tag absence: ${version}" >&2
+    exit 1
+  fi
 fi
-if gh release view "${version}" --repo garyfpga/codex-compact-fix >/dev/null 2>&1; then
+gh repo view garyfpga/codex-compact-fix --json nameWithOwner >/dev/null
+release_view_err="$(mktemp)"
+if gh release view "${version}" --repo garyfpga/codex-compact-fix >/dev/null 2>"${release_view_err}"; then
+  rm -f "${release_view_err}"
   echo "release already exists: ${version}" >&2
   exit 1
+elif ! grep -Eiq 'not found|404' "${release_view_err}"; then
+  cat "${release_view_err}" >&2
+  rm -f "${release_view_err}"
+  echo "could not confirm GitHub release absence: ${version}" >&2
+  exit 1
+else
+  rm -f "${release_view_err}"
 fi
 test -f codex
 test -x codex
@@ -112,6 +128,7 @@ Stop if:
 
 - `upstreamhash.txt` or `modversion.txt` is absent, untracked, dirty, staged but uncommitted, or fails exact shape validation.
 - A local tag, remote tag, or GitHub release already exists for `version`.
+- The remote tag or GitHub release absence check cannot distinguish missing state from an authentication, permission, network, or API error.
 - The binary is missing from the repository root.
 - The repository-root binary is not exactly `codex`, unless the user explicitly requested a different artifact path.
 - The display-only TUI version label is stale relative to the latest upstream stable SemVer release.
