@@ -1,17 +1,17 @@
 ---
 name: "mod-refresh-build"
-description: "Build the Linux Codex CLI .mod release artifact for a mod release. Use when invoked by $mod-refresh-release or $mod-release-current, or when the user explicitly asks to build the Linux Codex CLI .mod binary."
+description: "Build the Linux Codex CLI .mod release artifact at repo-root codex for a mod release. Use when invoked by $mod-refresh-release or $mod-release-current, or when the user explicitly asks to build the Linux Codex CLI .mod binary."
 ---
 
 # Mod Refresh Build
 
 ## Purpose
 
-Build only the Linux Codex CLI binary for a mod release, verify the build-focused result, and place the release artifact in the repository root for the publish step. This skill may be invoked by `$mod-refresh-release` or `$mod-release-current`.
+Build only the Linux Codex CLI binary for a mod release, verify the build-focused result, and place the release artifact at repository-root `codex` for the publish step. This skill may be invoked by `$mod-refresh-release` or `$mod-release-current`.
 
 ## Workflow
 
-1. Confirm the repository is already in the release source state: post-merge for `$mod-refresh-release`, or the intended current `HEAD` for `$mod-release-current`. If invoked by `$mod-refresh-release`, read the release plan for the expected artifact name and record build results there when possible. If invoked by `$mod-release-current`, read the current-release handoff or run notes for the expected artifact name and record build results there when possible.
+1. Confirm the repository is already in the release source state: post-merge for `$mod-refresh-release`, or the intended current `HEAD` for `$mod-release-current`. If invoked by `$mod-refresh-release`, read the release plan for the expected artifact path and record build results there when possible. If invoked by `$mod-release-current`, read the current-release handoff or run notes for the expected artifact path and record build results there when possible.
 2. If code changed during the release run, run formatting before building:
 
    ```bash
@@ -39,8 +39,13 @@ Build only the Linux Codex CLI binary for a mod release, verify the build-focuse
 
    If that file is absent, inspect the release build output or Cargo metadata to locate the executable produced by the `codex-cli` package. Do not build additional packages to find it.
 
-8. Copy the resulting CLI binary to the repository root. Use the artifact name from the release plan or coordinator request. If no artifact name is provided, ask for clarification before publishing; for build-only requests, copy to a clearly named repo-root `.mod` artifact and report the exact path.
-9. Preserve executable permissions on the copied artifact. If needed, run `chmod +x <repo-root-artifact>`.
+8. Copy the resulting CLI binary to repository-root `codex` unless the user explicitly requests a different artifact path. The default publish artifact path is exactly:
+
+   ```text
+   codex
+   ```
+
+9. Preserve executable permissions on `codex`. If needed, run `chmod +x codex`.
 
 ## Verification
 
@@ -50,7 +55,7 @@ After copying the artifact, use a `build-verifier` subagent with the same model 
 - The build command targeted only `codex-cli` in release mode.
 - `Tests: not run unless explicitly requested` is recorded and no tests ran unless explicitly requested.
 - `Bazel: not used; using Cargo release build only` is recorded and no Bazel commands ran unless explicitly requested.
-- The Linux CLI binary was located and copied to the repository root.
+- The Linux CLI binary was located and copied to repository-root `codex`.
 - The copied artifact path, size, executable bit, and source binary path are recorded.
 
 Resolve any verifier findings before handing off to publish.

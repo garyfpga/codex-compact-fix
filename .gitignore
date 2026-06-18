@@ -84,6 +84,7 @@ yarn.lock
 package.json-e
 session.ts-e
 CHANGELOG.ignore.md
+/codex
 
 # nix related
 .direnv

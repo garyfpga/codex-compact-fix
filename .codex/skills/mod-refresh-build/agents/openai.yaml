@@ -1,4 +1,4 @@
 interface:
   display_name: "Mod Refresh Build"
-  short_description: "Build Linux Codex .mod artifact"
-  default_prompt: "Use $mod-refresh-build to build the Linux Codex CLI .mod artifact after a mod-refresh merge."
+  short_description: "Build repo-root Codex mod binary"
+  default_prompt: "Use $mod-refresh-build to build the Linux Codex CLI mod binary at repo-root codex."

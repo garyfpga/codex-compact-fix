@@ -1,4 +1,4 @@
 interface:
   display_name: "Mod Refresh Publish"
   short_description: "Tag and publish Codex mod release"
-  default_prompt: "Use $mod-refresh-publish to publish either a mod refresh release or current-HEAD mod release."
+  default_prompt: "Use $mod-refresh-publish to publish a Codex mod release from repo-root codex, deriving the base series from the latest stable upstream release."

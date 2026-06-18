@@ -30,16 +30,16 @@ Use the current local date for `YYYY-MM-DD`. Use a short lowercase hyphenated to
 Include:
 
 - Fresh preflight report source and summary.
-- Release objective, upstream ref, current branch, expected release tag, and expected artifact name.
+- Release objective, upstream ref, current branch, expected release tag base from the latest stable upstream release, and expected artifact path `codex`.
 - Ordered execution checklist for merge preservation, build verification, and publish.
 - Local mod preservation risks and files/areas that need special attention.
 - Build command, expected Linux CLI binary path, and verification command/output to capture.
 - `Tests: not run unless explicitly requested`.
 - `Bazel: not used; using Cargo release build only`.
-- Publish command or process, tag name, release notes source, and artifact upload target.
+- Publish command or process, tag name, latest-stable upstream release source, release notes source, and artifact upload target.
 - Approval and stop-condition notes.
 
-After drafting the plan, use a `release-plan-reviewer` subagent with the same model as main agent and `reasoning_effort = high` to review the plan for missing gates, stale preflight assumptions, unclear artifact naming, and unsafe publish steps. Resolve reviewer findings in the plan before mutating.
+After drafting the plan, use a `release-plan-reviewer` subagent with the same model as main agent and `reasoning_effort = high` to review the plan for missing gates, stale preflight assumptions, unclear artifact path handling, and unsafe publish steps. Resolve reviewer findings in the plan before mutating.
 
 ## Execution Chain
 
@@ -63,10 +63,10 @@ Stop before publishing and ask for approval or clarification when any of these a
 
 - Merge preservation is incomplete, conflicted, unreviewed, or does not clearly preserve the local mods identified by preflight.
 - Build verification did not run, failed, produced unexpected output, or does not clearly validate the Linux CLI binary.
-- Artifact naming, release tag, release notes source, or publish destination is ambiguous.
+- Artifact path, release tag base, release notes source, or publish destination is ambiguous.
 - The current state diverges from the preflight assumptions or release plan.
 
-Do not tag or publish until merge preservation, build verification, artifact naming, and publish destination are explicit in the plan. If the user explicitly approves a clarified publish path, record that approval in the plan before continuing to `$mod-refresh-publish`.
+Do not tag or publish until merge preservation, build verification, artifact path, and publish destination are explicit in the plan. If the user explicitly approves a clarified publish path, record that approval in the plan before continuing to `$mod-refresh-publish`.
 
 ## Completion
 

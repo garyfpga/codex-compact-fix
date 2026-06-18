@@ -25,7 +25,7 @@ Before building, confirm and record:
 - Current branch name.
 - Worktree state from `git status --short`.
 - Whether the user explicitly requested tests or Bazel commands.
-- Release notes source and GitHub release destination, if already provided.
+- Release notes source, GitHub release destination, and latest stable upstream release base if already checked.
 
 Stop before building if the current commit is not clearly the intended release source, if the branch is unclear, or if the worktree state could make the release source ambiguous.
 
@@ -45,7 +45,7 @@ Run the release chain in this exact order:
 1. `$mod-refresh-build`
 2. `$mod-refresh-publish`
 
-Pass the confirmed current `HEAD`, branch, worktree state, test/Bazel decisions, release notes source, and GitHub release destination through the handoff context. The build step must use the current checkout as-is. The publish step must derive the version from the final `HEAD` and publish only after its packaging and safety gates pass.
+Pass the confirmed current `HEAD`, branch, worktree state, test/Bazel decisions, release notes source, and GitHub release destination through the handoff context. The build step must use the current checkout as-is. The publish step must derive the base series from the latest stable upstream Codex release, derive the suffix from final `HEAD`, and publish only after its packaging and safety gates pass.
 
 ## Subagent Policy
 
@@ -55,9 +55,9 @@ Ask the reviewer to verify:
 
 - The current `HEAD`, branch, and worktree state were captured before build.
 - No upstream fetch, preflight, merge simulation, upstream merge, or `$mod-refresh-release` invocation occurred.
-- `$mod-refresh-build` completed first and produced the repository-root artifact expected for publish.
+- `$mod-refresh-build` completed first and produced repository-root `codex` for publish.
 - The exact test and Bazel decisions were recorded.
-- Release notes source, GitHub release destination, artifact naming, and publish readiness are explicit.
+- Release notes source, GitHub release destination, latest-stable upstream base, repo-root `codex` artifact path, and publish readiness are explicit.
 
 Resolve reviewer findings before invoking `$mod-refresh-publish`. If no subagent facility is available, stop and report that the reviewer gate cannot be completed.
 
@@ -70,7 +70,7 @@ Stop and ask for clarification before continuing when any of these are true:
 - Uncommitted tracked changes could affect the final release commit.
 - Release notes source or GitHub release destination is unclear.
 - Build verification fails, is missing, or produces an unexpected artifact.
-- Artifact naming does not match the version that `$mod-refresh-publish` will derive from `HEAD`.
+- Artifact path is not repository-root `codex`, unless the user explicitly requested a different path.
 - The packaging reviewer gate cannot run or reports unresolved findings.
 - Any step would require upstream fetch, preflight, merge simulation, upstream merge, or `$mod-refresh-release`.
 - Tests or Bazel commands seem necessary but were not explicitly requested.

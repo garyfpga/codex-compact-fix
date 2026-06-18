@@ -79,7 +79,7 @@ Audit every merge resolution and final diff against these ChangeLog items:
 - Preserve V1 user-visible attempt counts, timeout wording, fallback warnings, failure categories, fallback warning counts, and clean-history restore behavior.
 - Preserve V2 policy parity with the shared wrapper, including version-specific attempt budget, timeout semantics, warning labels, request-shape parity where intended, and no hidden stream retries that inflate visible attempts.
 - Preserve compact integration tests, parity tests, config tests, and snapshots as source artifacts whenever request shape, warning text, fallback text, or config behavior changes; test commands are not run by default.
-- Preserve the TUI display-only version label at `0.139.0+gary`; do not route display surfaces back to `CARGO_PKG_VERSION`.
+- Preserve the TUI display-only version label as display-only and aligned with the current mod release base; do not route display surfaces back to `CARGO_PKG_VERSION`.
 - Preserve the Simple Power plan trail under `docs/simplepower/plans/` so future merge agents can read the rationale before changing code.
 - Preserve `docs/compact-fix/ChangeLog.md` itself as the durable behavior map, updating it only when the merge intentionally changes the preserved behavior set.
 

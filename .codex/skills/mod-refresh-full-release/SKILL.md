@@ -32,7 +32,7 @@ Before invoking `$mod-refresh-release`, ensure the handoff or release plan recor
 - `Tests: not run unless explicitly requested`
 - `Bazel: not used; using Cargo release build only`
 
-Include the preflight source, preflight recommendation, upstream ref, current branch, intended release target, expected artifact, and any compact-fix preservation risks that `$mod-refresh-release` must carry into its plan.
+Include the preflight source, preflight recommendation, upstream ref, current branch, intended release target, expected artifact path `codex`, and any compact-fix preservation risks that `$mod-refresh-release` must carry into its plan.
 
 ## Test, Bazel, And Maintenance Policy
 
@@ -48,7 +48,7 @@ Stop before mutation or publishing and ask for direction when any of these occur
 
 - Preflight is blocked or reports unresolved blockers.
 - Merge preservation discovers an unsurfaced compact-fix behavior choice.
-- Build fails or the expected artifact is missing.
+- Build fails or repository-root `codex` is missing.
 - Artifact naming, release tag, release notes source, publish repository, publish destination, or existing release state is ambiguous.
 - The current state diverges from preflight assumptions or the release handoff.
 - `git tag` succeeds but `gh release create` fails; report the partial tag state and ask for explicit recovery direction.

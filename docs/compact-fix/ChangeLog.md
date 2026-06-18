@@ -18,7 +18,7 @@ The inventory below intentionally excludes `docs/compact-fix/ChangeLog.md` and `
 - Keep V1 visible attempt counts, timeout wording, fallback warnings, and clean-history restore behavior stable.
 - Keep V2 policy parity with the shared wrapper, including the version-specific attempt budget and warning labels.
 - Keep the compact integration tests and snapshots current whenever request shape or fallback text changes.
-- Keep the TUI version label display-only and stable at `0.139.0+gary`.
+- Keep the TUI version label display-only and aligned with the current mod release base, currently `0.141.0+gary`.
 - Keep the Simple Power plan trail intact so future merge agents can read the rationale before changing code.
 
 ## Behavior Changes
@@ -219,7 +219,7 @@ These are the guardrails future merge agents need. Compact regressions tend to s
 - Rerun the focused compact tests after any merge conflict resolution in these files.
 - Keep the parity test normalization aligned with intentional V1/V2 differences only.
 
-### 9. Display-only TUI version label `0.139.0+gary`
+### 9. Display-only TUI version label `0.141.0+gary`
 **Files**
 - `codex-rs/tui/src/version.rs`
 - `codex-rs/tui/src/chatwidget/status_surfaces.rs`
@@ -235,14 +235,14 @@ These are the guardrails future merge agents need. Compact regressions tend to s
 - `codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__status_surface_previews_codex_version.snap:1-6`
 
 **What changed**
-`CODEX_CLI_DISPLAY_VERSION` now holds `0.139.0+gary`, and both the status line and terminal title preview route `CodexVersion` to that display-only constant. The preview placeholder and snapshot test follow the same label.
+`CODEX_CLI_DISPLAY_VERSION` now holds `0.141.0+gary`, and both the status line and terminal title preview route `CodexVersion` to that display-only constant. The preview placeholder and snapshot test follow the same label.
 
 **Why**
 The fork wants a visible version label that can differ from package metadata without altering release checks or external version behavior.
 
 **Future merge notes**
 - Never swap the TUI display path back to `CARGO_PKG_VERSION`.
-- Keep the snapshot updated if the display label intentionally changes.
+- Keep the snapshot updated if the display label intentionally changes, including when the mod release base advances with upstream stable releases.
 - Preserve the separation between display-only UI copy and package metadata.
 
 ### 10. Simple Power plan history as the rationale trail
