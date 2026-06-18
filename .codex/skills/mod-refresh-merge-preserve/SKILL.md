@@ -60,7 +60,7 @@ Give each subagent bounded context: the preflight handoff, the current conflict 
 
 5. Resolve conflicts by preserving the compact-fix contract unless a newer, explicit user-approved plan says otherwise.
 
-6. After conflicts are resolved, run only the non-test maintenance checks needed by touched files. Allowed examples include `just fmt`, schema generation, snapshot review or acceptance when generated UI/text artifacts intentionally changed, and dependency lock maintenance if dependencies changed. Do not run `just test`, `cargo test`, Bazel tests, full upstream suites, or focused upstream test commands unless the user, coordinator, or release plan explicitly requests tests. Build verification happens in `$mod-refresh-build`; do not run the release build from this skill by default.
+6. After conflicts are resolved, run only the non-test maintenance checks needed by touched files. Allowed examples include `just fmt`, schema generation, snapshot review or acceptance when generated UI/text artifacts intentionally changed, and dependency lock maintenance if dependencies changed. Do not run `just test`, `cargo test`, Bazel build commands, Bazel tests, full upstream suites, or focused upstream test commands unless the user, coordinator, or release plan explicitly requests them. Build verification happens in `$mod-refresh-build`; do not run the release build from this skill by default.
 
 7. Use `compact-preservation-reviewer` on the final diff before reporting completion.
 

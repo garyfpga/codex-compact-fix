@@ -1,17 +1,17 @@
 ---
 name: "mod-refresh-build"
-description: "Build the Linux Codex CLI .mod release artifact after a mod-refresh merge. Use when invoked by $mod-refresh-release or $mod-release-current, or when the user explicitly asks to build the Linux Codex CLI .mod binary after a mod-refresh merge."
+description: "Build the Linux Codex CLI .mod release artifact for a mod release. Use when invoked by $mod-refresh-release or $mod-release-current, or when the user explicitly asks to build the Linux Codex CLI .mod binary."
 ---
 
 # Mod Refresh Build
 
 ## Purpose
 
-Build only the Linux Codex CLI binary for a mod-refresh release, verify the build-focused result, and place the release artifact in the repository root for the publish step. This skill may be invoked by `$mod-refresh-release` or `$mod-release-current`.
+Build only the Linux Codex CLI binary for a mod release, verify the build-focused result, and place the release artifact in the repository root for the publish step. This skill may be invoked by `$mod-refresh-release` or `$mod-release-current`.
 
 ## Workflow
 
-1. Confirm the repository is already in the post-merge state for a mod refresh. If invoked by `$mod-refresh-release` or `$mod-release-current`, read the release plan for the expected artifact name and record build results there when possible.
+1. Confirm the repository is already in the release source state: post-merge for `$mod-refresh-release`, or the intended current `HEAD` for `$mod-release-current`. If invoked by `$mod-refresh-release`, read the release plan for the expected artifact name and record build results there when possible. If invoked by `$mod-release-current`, read the current-release handoff or run notes for the expected artifact name and record build results there when possible.
 2. If code changed during the release run, run formatting before building:
 
    ```bash
