@@ -121,6 +121,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::config::permissions::BUILT_IN_DANGER_FULL_ACCESS_PROFILE;
 use crate::config::permissions::BUILT_IN_READ_ONLY_PROFILE;
 use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
 use crate::config::permissions::apply_network_proxy_feature_config;
@@ -2865,6 +2866,7 @@ impl Config {
                 ),
             ));
         }
+        let dangerously_trust_all_projects = cfg.dangerously_trust_all_projects.unwrap_or(false);
 
         let tool_suggest = resolve_tool_suggest_config(&cfg, &config_layer_stack);
         let feature_overrides = FeatureOverrides {
@@ -2939,7 +2941,13 @@ impl Config {
                 resolved_cwd.as_path(),
                 repo_root.as_ref().map(AbsolutePathBuf::as_path),
             )
-            .unwrap_or(ProjectConfig { trust_level: None });
+            .unwrap_or(ProjectConfig {
+                trust_level: if dangerously_trust_all_projects {
+                    Some(TrustLevel::Trusted)
+                } else {
+                    None
+                },
+            });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
             &cfg,
@@ -2966,6 +2974,13 @@ impl Config {
                 "config defines `[permissions]` profiles but does not set `default_permissions`",
             ));
         }
+        let approval_policy_was_explicit =
+            approval_policy_override.is_some() || cfg.approval_policy.is_some();
+        let implicit_danger_full_access = dangerously_trust_all_projects
+            && permission_profile.is_none()
+            && permission_config_syntax.is_none()
+            && effective_permission_selection.selected_profile_id.is_none()
+            && !effective_permission_selection.requirements_force_profile_selection;
 
         let windows_sandbox_level = match effective_windows_sandbox_mode {
             Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
@@ -3049,10 +3064,14 @@ impl Config {
                     let default_permissions = effective_permission_selection
                         .selected_profile_id
                         .unwrap_or_else(|| {
-                            default_builtin_permission_profile_name(
-                                &active_project,
-                                windows_sandbox_level,
-                            )
+                            if implicit_danger_full_access {
+                                BUILT_IN_DANGER_FULL_ACCESS_PROFILE
+                            } else {
+                                default_builtin_permission_profile_name(
+                                    &active_project,
+                                    windows_sandbox_level,
+                                )
+                            }
                         });
                     network_proxy_config_for_profile_selection(
                         effective_permission_selection.profiles.as_ref(),
@@ -3072,7 +3091,14 @@ impl Config {
             let default_permissions = effective_permission_selection
                 .selected_profile_id
                 .unwrap_or_else(|| {
-                    default_builtin_permission_profile_name(&active_project, windows_sandbox_level)
+                    if implicit_danger_full_access {
+                        BUILT_IN_DANGER_FULL_ACCESS_PROFILE
+                    } else {
+                        default_builtin_permission_profile_name(
+                            &active_project,
+                            windows_sandbox_level,
+                        )
+                    }
                 });
             let builtin_workspace_write_settings = if using_implicit_builtin_profile {
                 cfg.sandbox_workspace_write.as_ref()
@@ -3190,12 +3216,12 @@ impl Config {
             }
             configured_network_proxy_config.network.enabled = true;
         }
-        let approval_policy_was_explicit =
-            approval_policy_override.is_some() || cfg.approval_policy.is_some();
         let mut approval_policy = approval_policy_override
             .or(cfg.approval_policy)
             .unwrap_or_else(|| {
-                if active_project.is_trusted() {
+                if implicit_danger_full_access && !approval_policy_was_explicit {
+                    AskForApproval::Never
+                } else if active_project.is_trusted() {
                     AskForApproval::OnRequest
                 } else if active_project.is_untrusted() {
                     AskForApproval::UnlessTrusted

@@ -4524,6 +4524,10 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "dangerously_trust_all_projects": {
+      "description": "Dangerous: treats unknown projects as trusted and defaults to full access when no explicit permission configuration is set.",
+      "type": "boolean"
+    },
     "debug": {
       "allOf": [
         {

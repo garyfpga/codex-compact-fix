@@ -281,7 +281,12 @@ impl ChatWidget {
         notification: ItemStartedNotification,
         from_replay: bool,
     ) {
-        match notification.item {
+        let ItemStartedNotification {
+            item,
+            started_at_ms,
+            ..
+        } = notification;
+        match item {
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_started(item),
             ThreadItem::FileChange { id: _, changes, .. } => {
                 self.on_patch_apply_begin(file_update_changes_to_display(changes));
@@ -315,6 +320,9 @@ impl ChatWidget {
                 agents_states,
             }),
             item @ ThreadItem::SubAgentActivity { .. } => self.on_sub_agent_activity(item),
+            ThreadItem::ContextCompaction { id } => {
+                self.on_context_compaction_started(id, Some(started_at_ms));
+            }
             ThreadItem::EnteredReviewMode { review, .. } if !from_replay => {
                 self.enter_review_mode_with_hint(review, /*from_replay*/ false);
             }
@@ -327,10 +335,21 @@ impl ChatWidget {
         notification: ItemCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
-        self.handle_thread_item(
-            notification.item,
-            notification.turn_id,
-            replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
-        );
+        let ItemCompletedNotification {
+            item,
+            turn_id,
+            completed_at_ms,
+            ..
+        } = notification;
+        match item {
+            ThreadItem::ContextCompaction { id } => {
+                self.on_context_compaction_completed(id, completed_at_ms);
+            }
+            item => self.handle_thread_item(
+                item,
+                turn_id,
+                replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+            ),
+        }
     }
 }

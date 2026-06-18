@@ -139,19 +139,21 @@ async fn run_remote_first_compact(
     version: RemoteCompactVersion,
 ) -> CodexResult<()> {
     let compact_service_tiers = resolve_remote_first_compact_service_tiers(&sess, &turn_context);
+    let fast_service_tier = ServiceTier::Fast.request_value();
+    let configured_service_tier = turn_context.config.service_tier.as_deref();
     let original_service_tier = turn_context
         .config
         .service_tier
         .as_deref()
         .unwrap_or("default")
         .to_string();
-    let emit_service_tier_status = compact_service_tiers
+    let remote_compact_is_fast = compact_service_tiers
         .remote_service_tier_override
         .as_deref()
-        .is_some_and(|service_tier| {
-            service_tier == ServiceTier::Fast.request_value()
-                && turn_context.config.service_tier.as_deref() != Some(service_tier)
-        });
+        == Some(fast_service_tier);
+    let emit_service_tier_status =
+        remote_compact_is_fast && configured_service_tier != Some(fast_service_tier);
+    let already_fast = remote_compact_is_fast && configured_service_tier == Some(fast_service_tier);
     if emit_service_tier_status {
         emit_compact_service_tier_status(
             &sess,
@@ -159,6 +161,15 @@ async fn run_remote_first_compact(
             format!(
                 "Compact operations are using fast service tier (priority); normal requests will return to {original_service_tier} afterward."
             ),
+        )
+        .await;
+    }
+    if already_fast && !emit_service_tier_status {
+        emit_compact_service_tier_status(
+            &sess,
+            &turn_context,
+            "Compact operations are already using fast service tier (priority); no service tier change needed."
+                .to_string(),
         )
         .await;
     }
