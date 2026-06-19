@@ -154,6 +154,35 @@ impl<T: HttpTransport> EndpointSession<T> {
     where
         C: Fn(&mut Request),
     {
+        self.stream_encoded_json_with_policy(
+            method,
+            path,
+            extra_headers,
+            body,
+            self.provider.retry.to_policy(),
+            configure,
+        )
+        .await
+    }
+
+    #[instrument(
+        name = "endpoint_session.stream_encoded_json_with",
+        level = "info",
+        skip_all,
+        fields(http.method = %method, api.path = path)
+    )]
+    pub(crate) async fn stream_encoded_json_with_policy<C>(
+        &self,
+        method: Method,
+        path: &str,
+        extra_headers: HeaderMap,
+        body: Option<EncodedJsonBody>,
+        retry_policy: RetryPolicy,
+        configure: C,
+    ) -> Result<StreamResponse, ApiError>
+    where
+        C: Fn(&mut Request),
+    {
         let body = body.map(RequestBody::EncodedJson);
         let mut request = self.make_request(&method, path, &extra_headers, body.as_ref());
         configure(&mut request);
@@ -161,7 +190,7 @@ impl<T: HttpTransport> EndpointSession<T> {
         let make_request = || request.clone();
 
         let stream = run_with_request_telemetry(
-            self.provider.retry.to_policy(),
+            retry_policy,
             self.request_telemetry.clone(),
             make_request,
             |req| {

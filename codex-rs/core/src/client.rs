@@ -53,6 +53,7 @@ use codex_api::ResponsesOptions as ApiResponsesOptions;
 use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::ResponsesWsRequest;
+use codex_api::RetryPolicy;
 use codex_api::SharedAuthProvider;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
@@ -78,7 +79,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::InternalSessionSource;
-use codex_protocol::protocol::RealtimeConversationArchitecture;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::CompactionTraceContext;
@@ -165,6 +165,40 @@ pub(crate) struct CompactConversationRequestSettings {
     pub(crate) service_tier: Option<String>,
 }
 
+#[derive(Clone)]
+enum ResponsesStreamRetryPolicy {
+    ProviderDefault,
+    Exact(RetryPolicy),
+}
+
+#[derive(Clone, Copy)]
+enum UnauthorizedRecoveryMode {
+    Enabled,
+    Disabled,
+}
+
+impl UnauthorizedRecoveryMode {
+    fn is_enabled(self) -> bool {
+        matches!(self, UnauthorizedRecoveryMode::Enabled)
+    }
+}
+
+impl ResponsesStreamRetryPolicy {
+    fn resolve(&self, provider: &ApiProvider) -> RetryPolicy {
+        match self {
+            ResponsesStreamRetryPolicy::ProviderDefault => provider.retry.to_policy(),
+            ResponsesStreamRetryPolicy::Exact(policy) => policy.clone(),
+        }
+    }
+
+    fn unauthorized_recovery(&self) -> UnauthorizedRecoveryMode {
+        match self {
+            ResponsesStreamRetryPolicy::ProviderDefault => UnauthorizedRecoveryMode::Enabled,
+            ResponsesStreamRetryPolicy::Exact(_) => UnauthorizedRecoveryMode::Disabled,
+        }
+    }
+}
+
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
@@ -179,6 +213,7 @@ struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
+    item_ids_enabled: bool,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
@@ -379,6 +414,7 @@ impl ModelClient {
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
+        item_ids_enabled: bool,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);
@@ -399,6 +435,7 @@ impl ModelClient {
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
+                item_ids_enabled,
                 include_attestation,
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
@@ -523,7 +560,7 @@ impl ModelClient {
         let ResponsesApiRequest {
             model,
             instructions,
-            input,
+            mut input,
             tools,
             parallel_tool_calls,
             reasoning,
@@ -532,6 +569,7 @@ impl ModelClient {
             text,
             ..
         } = request;
+        self.prepare_response_items_for_request(&mut input, /*store*/ false);
         let payload = ApiCompactionInput {
             model: &model,
             input: &input,
@@ -583,7 +621,6 @@ impl ModelClient {
         &self,
         sdp: String,
         session_config: ApiRealtimeSessionConfig,
-        architecture: RealtimeConversationArchitecture,
         mut extra_headers: ApiHeaderMap,
         api_provider_override: Option<ApiProvider>,
     ) -> Result<RealtimeWebrtcCallStart> {
@@ -600,12 +637,7 @@ impl ModelClient {
         let transport = ReqwestTransport::new(build_reqwest_client());
         let api_provider = api_provider_override.unwrap_or(client_setup.api_provider);
         let response = ApiRealtimeCallClient::new(transport, api_provider, client_setup.api_auth)
-            .create_with_session_architecture_and_headers(
-                sdp,
-                session_config,
-                architecture,
-                extra_headers,
-            )
+            .create_with_session_and_headers(sdp, session_config, extra_headers)
             .await
             .map_err(map_api_error)?;
         Ok(RealtimeWebrtcCallStart {
@@ -828,6 +860,16 @@ impl ModelClient {
             client_metadata: Some(responses_metadata.client_metadata()),
         };
         Ok(request)
+    }
+
+    fn prepare_response_items_for_request(&self, input: &mut [ResponseItem], store: bool) {
+        if self.state.item_ids_enabled || store {
+            return;
+        }
+
+        for item in input {
+            item.set_id(/*new_id*/ None);
+        }
     }
 
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
@@ -1270,6 +1312,7 @@ impl ModelClientSession {
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
+        retry_policy: ResponsesStreamRetryPolicy,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.provider.auth_manager();
         let mut auth_recovery = auth_manager
@@ -1299,7 +1342,7 @@ impl ModelClientSession {
                 )
                 .await;
 
-            let request = self.client.build_responses_request(
+            let mut request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
                 model_info,
@@ -1308,6 +1351,9 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
+            let store = request.store;
+            self.client
+                .prepare_response_items_for_request(&mut request.input, store);
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
@@ -1317,7 +1363,13 @@ impl ModelClientSession {
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-            let stream_result = client.stream_request(request, options).await;
+            let stream_result = client
+                .stream_request_with_policy(
+                    request,
+                    options,
+                    retry_policy.resolve(&client_setup.api_provider),
+                )
+                .await;
 
             match stream_result {
                 Ok(stream) => {
@@ -1330,7 +1382,9 @@ impl ModelClientSession {
                 }
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
-                )) if status == StatusCode::UNAUTHORIZED => {
+                )) if status == StatusCode::UNAUTHORIZED
+                    && retry_policy.unauthorized_recovery().is_enabled() =>
+                {
                     let response_debug_context =
                         extract_response_debug_context(&unauthorized_transport);
                     inference_trace_attempt.record_failed(
@@ -1390,6 +1444,7 @@ impl ModelClientSession {
         warmup: bool,
         request_trace: Option<W3cTraceContext>,
         inference_trace: &InferenceTraceContext,
+        unauthorized_recovery_mode: UnauthorizedRecoveryMode,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.provider.auth_manager();
 
@@ -1451,7 +1506,9 @@ impl ModelClientSession {
                 }
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
-                )) if status == StatusCode::UNAUTHORIZED => {
+                )) if status == StatusCode::UNAUTHORIZED
+                    && unauthorized_recovery_mode.is_enabled() =>
+                {
                     pending_retry = PendingUnauthorizedRetry::from_recovery(
                         handle_unauthorized(
                             unauthorized_transport,
@@ -1475,6 +1532,10 @@ impl ModelClientSession {
                 inference_trace.start_attempt()
             };
             stamp_ws_stream_request_start_ms(&mut ws_request);
+            let ResponsesWsRequest::ResponseCreate(ws_payload) = &mut ws_request;
+            let store = ws_payload.store;
+            self.client
+                .prepare_response_items_for_request(&mut ws_payload.input, store);
             if previous_response_id_from_untraced_warmup {
                 // The transport can reuse an untraced warmup response id and omit the
                 // already-sent input, but rollout replay needs the logical model-visible
@@ -1585,6 +1646,7 @@ impl ModelClientSession {
                 /*warmup*/ true,
                 current_span_w3c_trace_context(),
                 &disabled_trace,
+                UnauthorizedRecoveryMode::Enabled,
             )
             .await
         {
@@ -1627,6 +1689,60 @@ impl ModelClientSession {
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
+        self.stream_with_responses_retry_policy(
+            prompt,
+            model_info,
+            session_telemetry,
+            effort,
+            summary,
+            service_tier,
+            responses_metadata,
+            inference_trace,
+            ResponsesStreamRetryPolicy::ProviderDefault,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn stream_with_exact_retry_policy(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        service_tier: Option<String>,
+        responses_metadata: &CodexResponsesMetadata,
+        inference_trace: &InferenceTraceContext,
+        retry_policy: RetryPolicy,
+    ) -> Result<ResponseStream> {
+        self.stream_with_responses_retry_policy(
+            prompt,
+            model_info,
+            session_telemetry,
+            effort,
+            summary,
+            service_tier,
+            responses_metadata,
+            inference_trace,
+            ResponsesStreamRetryPolicy::Exact(retry_policy),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn stream_with_responses_retry_policy(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        service_tier: Option<String>,
+        responses_metadata: &CodexResponsesMetadata,
+        inference_trace: &InferenceTraceContext,
+        retry_policy: ResponsesStreamRetryPolicy,
+    ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
             WireApi::Responses => {
@@ -1644,6 +1760,7 @@ impl ModelClientSession {
                             /*warmup*/ false,
                             request_trace,
                             inference_trace,
+                            retry_policy.unauthorized_recovery(),
                         )
                         .await?
                     {
@@ -1663,6 +1780,7 @@ impl ModelClientSession {
                     service_tier,
                     responses_metadata,
                     inference_trace,
+                    retry_policy,
                 )
                 .await
             }

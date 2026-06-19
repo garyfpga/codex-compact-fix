@@ -95,6 +95,7 @@ pub struct ExecParams {
     pub capture_policy: ExecCapturePolicy,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
+    pub network_environment_id: Option<String>,
     pub sandbox_permissions: SandboxPermissions,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -125,6 +126,16 @@ fn select_process_exec_tool_sandbox_type(
         windows_sandbox_level,
         enforce_managed_network,
     )
+}
+
+fn network_proxy_environment_error(
+    network_environment_id: Option<&str>,
+    err: impl std::fmt::Display,
+) -> CodexErr {
+    let environment_id = network_environment_id.unwrap_or("default");
+    CodexErr::Io(io::Error::other(format!(
+        "failed to prepare network proxy for environment `{environment_id}`: {err}"
+    )))
 }
 
 /// Mechanism to terminate an exec invocation before it finishes naturally.
@@ -321,6 +332,7 @@ pub fn build_exec_request(
         expiration,
         capture_policy,
         network,
+        network_environment_id,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
 
@@ -343,7 +355,11 @@ pub fn build_exec_request(
     tracing::debug!("Sandbox type: {sandbox_type:?}");
 
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        network
+            .apply_to_env_for_optional_environment(&mut env, network_environment_id.as_deref())
+            .map_err(|err| {
+                network_proxy_environment_error(network_environment_id.as_deref(), err)
+            })?;
     }
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
@@ -372,6 +388,7 @@ pub fn build_exec_request(
             permissions: permission_profile,
             sandbox: sandbox_type,
             enforce_managed_network,
+            environment_id: network_environment_id.as_deref(),
             network: network.as_ref(),
             sandbox_policy_cwd: &sandbox_policy_cwd_uri,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_deref(),
@@ -437,6 +454,7 @@ pub(crate) async fn execute_exec_request(
         file_system_sandbox_policy: _,
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides,
+        network_environment_id,
         arg0,
     } = exec_request;
 
@@ -456,6 +474,7 @@ pub(crate) async fn execute_exec_request(
         capture_policy,
         env,
         network: network.clone(),
+        network_environment_id,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -593,6 +612,7 @@ async fn exec_windows_sandbox(
         cwd,
         mut env,
         network,
+        network_environment_id,
         expiration,
         capture_policy,
         windows_sandbox_level,
@@ -600,7 +620,11 @@ async fn exec_windows_sandbox(
         ..
     } = params;
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        network
+            .apply_to_env_for_optional_environment(&mut env, network_environment_id.as_deref())
+            .map_err(|err| {
+                network_proxy_environment_error(network_environment_id.as_deref(), err)
+            })?;
     }
 
     // Windows sandbox capture still receives timeout and cancellation separately.
@@ -941,6 +965,7 @@ async fn exec(
         cwd,
         mut env,
         network,
+        network_environment_id,
         arg0,
         expiration,
         capture_policy,
@@ -954,7 +979,11 @@ async fn exec(
         justification: _,
     } = params;
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        network
+            .apply_to_env_for_optional_environment(&mut env, network_environment_id.as_deref())
+            .map_err(|err| {
+                network_proxy_environment_error(network_environment_id.as_deref(), err)
+            })?;
     }
 
     let (program, args) = command.split_first().ok_or_else(|| {

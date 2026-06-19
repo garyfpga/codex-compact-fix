@@ -54,6 +54,18 @@ pub(crate) struct RemoteCompactionRunSettings {
     pub(crate) attempt_timeout: Duration,
 }
 
+pub(crate) fn no_hidden_remote_compact_retry_policy() -> RetryPolicy {
+    RetryPolicy {
+        max_attempts: 0,
+        base_delay: Duration::ZERO,
+        retry_on: RetryOn {
+            retry_429: false,
+            retry_5xx: false,
+            retry_transport: false,
+        },
+    }
+}
+
 pub(crate) async fn run_remote_compact_task_for_mode(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -209,7 +221,7 @@ async fn run_remote_compact_task_inner_impl(
         settings,
     )
     .await?;
-    let new_window_id = sess.advance_auto_compact_window_id().await;
+    let (new_window_number, new_window_id) = sess.advance_auto_compact_window().await;
     new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -225,6 +237,7 @@ async fn run_remote_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history.clone()),
+        window_number: Some(new_window_number),
         window_id: Some(new_window_id),
     };
     // Install is the semantic boundary where the compact endpoint's output becomes live
@@ -234,8 +247,13 @@ async fn run_remote_compact_task_inner_impl(
         input_history: &trace_input_history,
         replacement_history: &new_history,
     });
-    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await;
+    sess.replace_compacted_history(
+        turn_context.as_ref(),
+        new_history,
+        reference_context_item,
+        compacted_item,
+    )
+    .await;
     sess.recompute_token_usage(turn_context).await;
 
     sess.emit_turn_item_completed(turn_context, compaction_item)
@@ -285,15 +303,7 @@ async fn run_remote_compaction_request_v1(
                     service_tier,
                     request_timeout: attempt_timeout,
                     tcp_keepalive_interval,
-                    retry_policy: RetryPolicy {
-                        max_attempts: 0,
-                        base_delay: Duration::ZERO,
-                        retry_on: RetryOn {
-                            retry_429: false,
-                            retry_5xx: false,
-                            retry_transport: false,
-                        },
-                    },
+                    retry_policy: no_hidden_remote_compact_retry_policy(),
                 },
                 &turn_context.session_telemetry,
                 compaction_trace,

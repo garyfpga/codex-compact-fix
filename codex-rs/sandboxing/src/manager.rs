@@ -113,6 +113,7 @@ pub struct SandboxExecRequest {
     pub sandbox_policy_cwd: PathUri,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
+    pub network_environment_id: Option<String>,
     pub sandbox: SandboxType,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -130,6 +131,7 @@ pub struct SandboxTransformRequest<'a> {
     pub permissions: &'a PermissionProfile,
     pub sandbox: SandboxType,
     pub enforce_managed_network: bool,
+    pub environment_id: Option<&'a str>,
     // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
     // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
@@ -207,6 +209,7 @@ pub enum SandboxTransformError {
         source: io::Error,
     },
     MissingLinuxSandboxExecutable,
+    EnvironmentNetworkProxy(String),
     #[cfg(target_os = "linux")]
     Wsl1UnsupportedForBubblewrap,
     #[cfg(not(target_os = "macos"))]
@@ -231,6 +234,9 @@ impl std::fmt::Display for SandboxTransformError {
             Self::MissingLinuxSandboxExecutable => {
                 write!(f, "missing codex-linux-sandbox executable path")
             }
+            Self::EnvironmentNetworkProxy(err) => {
+                write!(f, "failed to prepare environment network proxy: {err}")
+            }
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => write!(f, "{WSL1_BWRAP_WARNING}"),
             #[cfg(not(target_os = "macos"))]
@@ -249,6 +255,7 @@ impl std::error::Error for SandboxTransformError {
             Self::InvalidCommandCwd { source, .. }
             | Self::InvalidSandboxPolicyCwd { source, .. } => Some(source),
             Self::MissingLinuxSandboxExecutable => None,
+            Self::EnvironmentNetworkProxy(_) => None,
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => None,
             #[cfg(not(target_os = "macos"))]
@@ -305,6 +312,7 @@ impl SandboxManager {
             permissions,
             sandbox,
             enforce_managed_network,
+            environment_id,
             network,
             sandbox_policy_cwd,
             codex_linux_sandbox_exe,
@@ -344,9 +352,11 @@ impl SandboxManager {
                     network_sandbox_policy: pending.effective_network_policy,
                     sandbox_policy_cwd: pending.native_sandbox_policy_cwd.as_path(),
                     enforce_managed_network,
+                    environment_id,
                     network,
                     extra_allow_unix_sockets: &[],
-                });
+                })
+                .map_err(SandboxTransformError::EnvironmentNetworkProxy)?;
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
                 full_command.append(&mut args);
@@ -422,6 +432,7 @@ impl SandboxManager {
             sandbox_policy_cwd: sandbox_policy_cwd.clone(),
             env: command.env,
             network: network.cloned(),
+            network_environment_id: environment_id.map(str::to_string),
             sandbox,
             windows_sandbox_level,
             windows_sandbox_private_desktop,

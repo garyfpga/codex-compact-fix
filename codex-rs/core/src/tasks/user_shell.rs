@@ -41,6 +41,7 @@ use codex_shell_command::parse_command::parse_command;
 
 use super::SessionTask;
 use super::SessionTaskContext;
+use super::SessionTaskResult;
 use crate::session::session::Session;
 use codex_protocol::models::PermissionProfile;
 
@@ -82,7 +83,7 @@ impl SessionTask for UserShellCommandTask {
         turn_context: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> SessionTaskResult {
         execute_user_shell_command(
             session.clone_session(),
             turn_context,
@@ -91,7 +92,7 @@ impl SessionTask for UserShellCommandTask {
             UserShellCommandMode::StandaloneTurn,
         )
         .await;
-        None
+        Ok(None)
     }
 }
 
@@ -205,6 +206,7 @@ pub(crate) async fn execute_user_shell_command(
         // `/shell` is the explicit full-access escape hatch, so it must not
         // inherit a managed proxy from the surrounding session or turn.
         network: None,
+        network_environment_id: None,
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
         // should use that instead of an "arbitrarily large" timeout here.
         expiration: USER_SHELL_TIMEOUT_MS.into(),

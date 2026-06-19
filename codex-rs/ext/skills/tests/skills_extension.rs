@@ -183,7 +183,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         .await;
 
     let prompt_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store)
         .await;
     assert_eq!(1, prompt_fragments.len());
     assert!(
@@ -228,7 +228,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         read_request_keys(&read_requests)
     );
     let rebuilt_prompt_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store)
         .await;
     assert_eq!(1, rebuilt_prompt_fragments.len());
     assert!(rebuilt_prompt_fragments[0].text().contains("lint-fix"));
@@ -294,7 +294,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
         .await;
 
     let initial_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store)
         .await;
     assert!(initial_fragments.is_empty());
     let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
@@ -565,12 +565,14 @@ fn test_entry(
 struct TestConfig {
     include_instructions: bool,
     bundled_skills_enabled: bool,
+    orchestrator_skills_enabled: bool,
 }
 
 fn default_config() -> TestConfig {
     TestConfig {
         include_instructions: true,
         bundled_skills_enabled: true,
+        orchestrator_skills_enabled: true,
     }
 }
 
@@ -578,6 +580,7 @@ fn skills_extension_config(config: &TestConfig) -> SkillsExtensionConfig {
     SkillsExtensionConfig {
         include_instructions: config.include_instructions,
         bundled_skills_enabled: config.bundled_skills_enabled,
+        orchestrator_skills_enabled: config.orchestrator_skills_enabled,
     }
 }
 
