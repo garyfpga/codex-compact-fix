@@ -274,5 +274,10 @@ If `git tag`, `git push`, or `gh release create` partially succeeds and a later 
 - Merge preservation review: PASS after API retry-policy plumbing fix.
 - Build: first `CODEX_CLI_RELEASE_VERSION=0.141.04483.1.mod cargo build -p codex-cli --release` failed in `codex-core` because the Responses API stream path borrowed `client_setup.api_provider` after moving it into the API client.
 - Build fix: resolved the stream retry policy before moving `client_setup.api_provider` into `ApiResponsesClient`.
-- Build: pending.
+- Build: after committing the ownership fix, reran `cd codex-rs && CODEX_CLI_RELEASE_VERSION=0.141.04483.1.mod cargo build -p codex-cli --release`; it completed successfully in 8m30s. Warnings only: dead-code warnings in `codex-api` stream wrapper methods and an upstream unused-mut warning in `codex-app-server`.
+- Artifact: copied `codex-rs/target/release/codex` to repository-root `codex` and preserved executable permissions.
+- Artifact verification: `stat -c '%n %s %A' codex codex-rs/target/release/codex` reported both files as `1256201168` bytes and `-rwxr-xr-x`.
+- Artifact verification: `sha256sum codex codex-rs/target/release/codex` reported `d61e42aef6b20e5ed6607e05b62326ccbfd4a93b9487086cef9ae57f02f29153` for both files.
+- Artifact verification: `./codex --version` reported exactly `codex-cli 0.141.04483.1.mod`.
+- Build verifier: pending.
 - Publish: pending.
