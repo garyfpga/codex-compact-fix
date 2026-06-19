@@ -272,5 +272,7 @@ If `git tag`, `git push`, or `gh release create` partially succeeds and a later 
 - Merge preservation review: third reviewer BLOCK; Responses API policy-aware streaming path called the provider-default endpoint session wrapper instead of the policy-aware wrapper, which would not compile with the new retry-policy argument.
 - Merge preservation fix: changed `ResponsesClient::stream_encoded_with_policy` to call `EndpointSession::stream_encoded_json_with_policy`. Ran `cd codex-rs && just fmt` again. Tests were not run, per release policy.
 - Merge preservation review: PASS after API retry-policy plumbing fix.
+- Build: first `CODEX_CLI_RELEASE_VERSION=0.141.04483.1.mod cargo build -p codex-cli --release` failed in `codex-core` because the Responses API stream path borrowed `client_setup.api_provider` after moving it into the API client.
+- Build fix: resolved the stream retry policy before moving `client_setup.api_provider` into `ApiResponsesClient`.
 - Build: pending.
 - Publish: pending.

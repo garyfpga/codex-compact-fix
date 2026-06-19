@@ -1357,6 +1357,7 @@ impl ModelClientSession {
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
+            let resolved_retry_policy = retry_policy.resolve(&client_setup.api_provider);
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1364,11 +1365,7 @@ impl ModelClientSession {
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
             let stream_result = client
-                .stream_request_with_policy(
-                    request,
-                    options,
-                    retry_policy.resolve(&client_setup.api_provider),
-                )
+                .stream_request_with_policy(request, options, resolved_retry_policy)
                 .await;
 
             match stream_result {
