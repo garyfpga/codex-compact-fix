@@ -4,11 +4,21 @@
 //! into another, especially while Plan mode is active.
 
 use super::*;
+use crate::app_event::ModelSelectionPersistence;
+use crate::app_event_sender::AppEventSender;
 
 impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
+        self.open_model_popup_for_persistence(ModelSelectionPersistence::Temporary);
+    }
+
+    pub(crate) fn open_model_popup_persistent(&mut self) {
+        self.open_model_popup_for_persistence(ModelSelectionPersistence::Persist);
+    }
+
+    fn open_model_popup_for_persistence(&mut self, persistence: ModelSelectionPersistence) {
         if !self.is_session_configured() {
             self.add_info_message(
                 "Model selection is disabled until startup completes.".to_string(),
@@ -20,14 +30,18 @@ impl ChatWidget {
         let presets: Vec<ModelPreset> = match self.model_catalog.try_list_models() {
             Ok(models) => models,
             Err(_) => {
+                let command = match persistence {
+                    ModelSelectionPersistence::Temporary => "/model",
+                    ModelSelectionPersistence::Persist => "/modelp",
+                };
                 self.add_info_message(
-                    "Models are being updated; please try /model again in a moment.".to_string(),
+                    format!("Models are being updated; please try {command} again in a moment."),
                     /*hint*/ None,
                 );
                 return;
             }
         };
-        self.open_model_popup_with_presets(presets);
+        self.open_model_popup_with_presets_for_persistence(presets, persistence);
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -69,7 +83,19 @@ impl ChatWidget {
         Some(trimmed.to_string())
     }
 
+    #[cfg(test)]
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+        self.open_model_popup_with_presets_for_persistence(
+            presets,
+            ModelSelectionPersistence::Temporary,
+        );
+    }
+
+    fn open_model_popup_with_presets_for_persistence(
+        &mut self,
+        presets: Vec<ModelPreset>,
+        persistence: ModelSelectionPersistence,
+    ) {
         let presets: Vec<ModelPreset> = presets
             .into_iter()
             .filter(|preset| preset.show_in_picker)
@@ -87,7 +113,7 @@ impl ChatWidget {
             .partition(|preset| Self::is_auto_model(&preset.model));
 
         if auto_presets.is_empty() {
-            self.open_all_models_popup(other_presets);
+            self.open_all_models_popup_with_persistence(other_presets, persistence);
             return;
         }
 
@@ -106,6 +132,7 @@ impl ChatWidget {
                     model.clone(),
                     Some(preset.default_reasoning_effort.clone()),
                     should_prompt_plan_mode_scope,
+                    persistence,
                 );
                 SelectionItem {
                     name: model.clone(),
@@ -124,6 +151,7 @@ impl ChatWidget {
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenAllModelsPopup {
                     models: all_models.clone(),
+                    persistence,
                 });
             })];
 
@@ -167,7 +195,11 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn open_all_models_popup(&mut self, presets: Vec<ModelPreset>) {
+    pub(crate) fn open_all_models_popup_with_persistence(
+        &mut self,
+        presets: Vec<ModelPreset>,
+        persistence: ModelSelectionPersistence,
+    ) {
         if presets.is_empty() {
             self.add_info_message(
                 "No additional models are available right now.".to_string(),
@@ -187,6 +219,7 @@ impl ChatWidget {
                 let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_event,
+                    persistence,
                 });
             })];
             items.push(SelectionItem {
@@ -217,23 +250,38 @@ impl ChatWidget {
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
         should_prompt_plan_mode_scope: bool,
+        persistence: ModelSelectionPersistence,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             if should_prompt_plan_mode_scope {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                     model: model_for_action.clone(),
                     effort: effort_for_action.clone(),
+                    persistence,
                 });
                 return;
             }
 
-            tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-            tx.send(AppEvent::UpdateReasoningEffort(effort_for_action.clone()));
-            tx.send(AppEvent::PersistModelSelection {
-                model: model_for_action.clone(),
-                effort: effort_for_action.clone(),
-            });
+            Self::send_model_selection_events(
+                tx,
+                model_for_action.clone(),
+                effort_for_action.clone(),
+                persistence,
+            );
         })]
+    }
+
+    fn send_model_selection_events(
+        tx: &AppEventSender,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        persistence: ModelSelectionPersistence,
+    ) {
+        tx.send(AppEvent::UpdateModel(model.clone()));
+        tx.send(AppEvent::UpdateReasoningEffort(effort.clone()));
+        if persistence == ModelSelectionPersistence::Persist {
+            tx.send(AppEvent::PersistModelSelection { model, effort });
+        }
     }
 
     fn should_prompt_plan_mode_reasoning_scope(
@@ -256,10 +304,24 @@ impl ChatWidget {
             || selected_effort != self.current_collaboration_mode.reasoning_effort()
     }
 
+    #[cfg(test)]
     pub(crate) fn open_plan_reasoning_scope_prompt(
         &mut self,
         model: String,
         effort: Option<ReasoningEffortConfig>,
+    ) {
+        self.open_plan_reasoning_scope_prompt_with_persistence(
+            model,
+            effort,
+            ModelSelectionPersistence::Persist,
+        );
+    }
+
+    pub(crate) fn open_plan_reasoning_scope_prompt_with_persistence(
+        &mut self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        persistence: ModelSelectionPersistence,
     ) {
         let reasoning_phrase = match effort.as_ref() {
             Some(ReasoningEffortConfig::None) => "no reasoning".to_string(),
@@ -306,18 +368,22 @@ impl ChatWidget {
             move |tx| {
                 tx.send(AppEvent::UpdateModel(model.clone()));
                 tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort.clone()));
-                tx.send(AppEvent::PersistPlanModeReasoningEffort(effort.clone()));
+                if persistence == ModelSelectionPersistence::Persist {
+                    tx.send(AppEvent::PersistPlanModeReasoningEffort(effort.clone()));
+                }
             }
         })];
         let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::UpdateModel(model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort.clone()));
             tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort.clone()));
-            tx.send(AppEvent::PersistPlanModeReasoningEffort(effort.clone()));
-            tx.send(AppEvent::PersistModelSelection {
-                model: model.clone(),
-                effort: effort.clone(),
-            });
+            if persistence == ModelSelectionPersistence::Persist {
+                tx.send(AppEvent::PersistPlanModeReasoningEffort(effort.clone()));
+                tx.send(AppEvent::PersistModelSelection {
+                    model: model.clone(),
+                    effort: effort.clone(),
+                });
+            }
         })];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -348,7 +414,16 @@ impl ChatWidget {
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
+    #[cfg(test)]
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
+        self.open_reasoning_popup_with_persistence(preset, ModelSelectionPersistence::Persist);
+    }
+
+    pub(crate) fn open_reasoning_popup_with_persistence(
+        &mut self,
+        preset: ModelPreset,
+        persistence: ModelSelectionPersistence,
+    ) {
         let default_effort = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
         let in_plan_mode =
@@ -393,9 +468,14 @@ impl ChatWidget {
                     .send(AppEvent::OpenPlanReasoningScopePrompt {
                         model: selected_model,
                         effort: selected_effort,
+                        persistence,
                     });
             } else {
-                self.apply_model_and_effort(selected_model, selected_effort);
+                self.apply_model_and_effort_with_persistence(
+                    selected_model,
+                    selected_effort,
+                    persistence,
+                );
             }
             return;
         }
@@ -461,14 +541,15 @@ impl ChatWidget {
                     tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                         model: model_for_action.clone(),
                         effort: choice_effort.clone(),
+                        persistence,
                     });
                 } else {
-                    tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-                    tx.send(AppEvent::UpdateReasoningEffort(choice_effort.clone()));
-                    tx.send(AppEvent::PersistModelSelection {
-                        model: model_for_action.clone(),
-                        effort: choice_effort.clone(),
-                    });
+                    Self::send_model_selection_events(
+                        tx,
+                        model_for_action.clone(),
+                        choice_effort.clone(),
+                        persistence,
+                    );
                 }
             })];
 
@@ -526,9 +607,12 @@ impl ChatWidget {
             .send(AppEvent::UpdateReasoningEffort(effort));
     }
 
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
-        self.apply_model_and_effort_without_persist(model.clone(), effort.clone());
-        self.app_event_tx
-            .send(AppEvent::PersistModelSelection { model, effort });
+    fn apply_model_and_effort_with_persistence(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        persistence: ModelSelectionPersistence,
+    ) {
+        Self::send_model_selection_events(&self.app_event_tx, model, effort, persistence);
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_event::ModelSelectionPersistence;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -311,13 +312,14 @@ async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
         event,
         AppEvent::OpenPlanReasoningScopePrompt {
             model,
-            effort: Some(_)
+            effort: Some(_),
+            persistence: ModelSelectionPersistence::Persist,
         } if model == "gpt-5.4"
     );
 }
 
 #[tokio::test]
-async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_scope_prompt_event() {
+async fn reasoning_selection_in_plan_mode_temporary_selection_does_not_persist() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
@@ -330,7 +332,7 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
     let preset = get_available_model(&chat, "gpt-5.4");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup_with_persistence(preset, ModelSelectionPersistence::Temporary);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
@@ -346,6 +348,24 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
             .iter()
             .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
         "expected reasoning update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::OpenPlanReasoningScopePrompt { .. })),
+        "expected temporary selection not to open a Plan scope prompt; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistPlanModeReasoningEffort(_))),
+        "expected temporary selection not to persist Plan-mode reasoning; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
+        "expected temporary selection not to persist the model choice; events: {events:?}"
     );
 }
 
@@ -375,7 +395,40 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
         event,
         AppEvent::OpenPlanReasoningScopePrompt {
             model,
-            effort: Some(ReasoningEffortConfig::Medium)
+            effort: Some(ReasoningEffortConfig::Medium),
+            persistence: ModelSelectionPersistence::Persist,
+        } if model == "gpt-5.4"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_global_opens_temporary_scope_prompt()
+ {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    // Reproduce: Plan effective reasoning remains the preset (medium), but the
+    // global default differs (high). Pressing Enter on the current Plan choice
+    // should open the scope prompt rather than silently rewriting the global default.
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let preset = get_available_model(&chat, "gpt-5.4");
+    chat.open_reasoning_popup_with_persistence(preset, ModelSelectionPersistence::Temporary);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    assert_matches!(
+        event,
+        AppEvent::OpenPlanReasoningScopePrompt {
+            model,
+            effort: Some(ReasoningEffortConfig::Medium),
+            persistence: ModelSelectionPersistence::Temporary,
         } if model == "gpt-5.4"
     );
 }
@@ -479,12 +532,35 @@ async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_promp
             .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
         "expected reasoning update event; events: {events:?}"
     );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::OpenPlanReasoningScopePrompt { .. })),
+        "expected different-model selection not to open a Plan scope prompt; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelection { model, .. } if model == "gpt-5.2"
+        )),
+        "expected persistent model selection event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistPlanModeReasoningEffort(_))),
+        "expected non-Plan model selection not to persist Plan-mode reasoning; events: {events:?}"
+    );
 }
 
 #[tokio::test]
 async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.open_plan_reasoning_scope_prompt("gpt-5.4".to_string(), Some(ReasoningEffortConfig::High));
+    chat.open_plan_reasoning_scope_prompt_with_persistence(
+        "gpt-5.4".to_string(),
+        Some(ReasoningEffortConfig::High),
+        ModelSelectionPersistence::Persist,
+    );
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -511,6 +587,55 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override(
                 if model == "gpt-5.4"
         )),
         "expected global model reasoning selection persistence; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_all_modes_temporary_does_not_persist_global_and_plan_override()
+{
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.open_plan_reasoning_scope_prompt_with_persistence(
+        "gpt-5.4".to_string(),
+        Some(ReasoningEffortConfig::High),
+        ModelSelectionPersistence::Temporary,
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected temporary plan override to be updated; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected temporary all-modes selection to update global reasoning; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateModel(model) if model == "gpt-5.4"
+        )),
+        "expected temporary all-modes selection to update the model; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistPlanModeReasoningEffort(_))),
+        "expected temporary all-modes selection not to persist the Plan override; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
+        "expected temporary all-modes selection not to persist the global model choice; events: {events:?}"
     );
 }
 

@@ -2,7 +2,8 @@
 source: tui/src/bottom_pane/command_popup.rs
 expression: commands
 ---
-/model - choose what model and reasoning effort to use
+/model - choose what model and reasoning effort to use for this session
+/modelp - choose what model and reasoning effort to save as the default
 /ide - include current selection, open files, and other context from your IDE
 /permissions - choose what Codex is allowed to do
 /keymap - remap TUI shortcuts

@@ -373,6 +373,7 @@ async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_
 #[tokio::test]
 async fn queued_slash_menu_cancel_drains_next_input() {
     assert_cancelled_queued_menu_drains_next_input("/model", "Select Model").await;
+    assert_cancelled_queued_menu_drains_next_input("/modelp", "Select Model").await;
     assert_cancelled_queued_menu_drains_next_input("/permissions", "Update Model Permissions")
         .await;
 }
@@ -1591,23 +1592,27 @@ async fn unrecognized_slash_command_is_not_added_to_local_recall() {
 }
 
 #[tokio::test]
-async fn unavailable_slash_command_is_available_from_local_recall() {
+async fn unavailable_model_commands_are_available_from_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);
 
-    submit_composer_text(&mut chat, "/model");
+    for command in ["/model", "/modelp"] {
+        submit_composer_text(&mut chat, command);
 
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("'/model' is disabled while a task is in progress."),
-        "expected disabled-command message, got: {rendered:?}"
-    );
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/model");
+        let cells = drain_insert_history(&mut rx);
+        let rendered = cells
+            .iter()
+            .map(|cell| lines_to_single_string(cell))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains(&format!(
+                "'{command}' is disabled while a task is in progress."
+            )),
+            "expected disabled-command message, got: {rendered:?}"
+        );
+        assert_eq!(recall_latest_after_clearing(&mut chat), command);
+    }
 }
 
 #[tokio::test]

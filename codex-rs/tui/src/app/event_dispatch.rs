@@ -892,15 +892,24 @@ impl App {
                 self.sync_active_thread_personality_setting(app_server, personality)
                     .await;
             }
-            AppEvent::OpenReasoningPopup { model } => {
-                self.chat_widget.open_reasoning_popup(model);
-            }
-            AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
+            AppEvent::OpenReasoningPopup { model, persistence } => {
                 self.chat_widget
-                    .open_plan_reasoning_scope_prompt(model, effort);
+                    .open_reasoning_popup_with_persistence(model, persistence);
             }
-            AppEvent::OpenAllModelsPopup { models } => {
-                self.chat_widget.open_all_models_popup(models);
+            AppEvent::OpenPlanReasoningScopePrompt {
+                model,
+                effort,
+                persistence,
+            } => {
+                self.chat_widget
+                    .open_plan_reasoning_scope_prompt_with_persistence(model, effort, persistence);
+            }
+            AppEvent::OpenAllModelsPopup {
+                models,
+                persistence,
+            } => {
+                self.chat_widget
+                    .open_all_models_popup_with_persistence(models, persistence);
             }
             AppEvent::OpenFullAccessConfirmation {
                 preset,

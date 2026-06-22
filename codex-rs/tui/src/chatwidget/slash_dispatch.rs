@@ -264,6 +264,9 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
+            SlashCommand::ModelPersistent => {
+                self.open_model_popup_persistent();
+            }
             SlashCommand::Personality => {
                 self.open_personality_popup();
             }
@@ -1060,6 +1063,7 @@ impl ChatWidget {
             | SlashCommand::Compact
             | SlashCommand::Review
             | SlashCommand::Model
+            | SlashCommand::ModelPersistent
             | SlashCommand::Personality
             | SlashCommand::Plan
             | SlashCommand::Goal

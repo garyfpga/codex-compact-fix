@@ -247,10 +247,20 @@ mod tests {
             .iter()
             .position(|item| matches!(item, SlashCommandItem::Builtin(SlashCommand::Model)))
             .expect("model command should be visible");
+        let modelp_idx = items
+            .iter()
+            .position(|item| {
+                matches!(
+                    item,
+                    SlashCommandItem::Builtin(SlashCommand::ModelPersistent)
+                )
+            })
+            .expect("modelp command should be visible");
+        assert!(modelp_idx > model_idx, "expected /modelp after /model");
         let inserted = items
             .into_iter()
             .skip(model_idx + 1)
-            .take(commands.len())
+            .take(modelp_idx - model_idx - 1)
             .collect::<Vec<_>>();
         let expected = commands
             .into_iter()

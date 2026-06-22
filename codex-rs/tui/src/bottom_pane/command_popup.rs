@@ -332,6 +332,13 @@ mod tests {
             }
             None => panic!("expected at least one match for '/mo'"),
         }
+        match matches.get(1) {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "modelp"),
+            Some(CommandItem::ServiceTier(command)) => {
+                panic!("expected modelp command, got service tier {command:?}")
+            }
+            None => panic!("expected /mo to include modelp as the second match"),
+        }
     }
 
     #[test]
@@ -384,6 +391,7 @@ mod tests {
             cmds,
             vec![
                 "model".to_string(),
+                "modelp".to_string(),
                 "memories".to_string(),
                 "mention".to_string(),
                 "mcp".to_string()

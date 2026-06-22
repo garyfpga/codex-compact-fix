@@ -131,6 +131,12 @@ pub(crate) enum RateLimitRefreshOrigin {
     ResetConsume { request_id: u64 },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModelSelectionPersistence {
+    Temporary,
+    Persist,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KeymapEditIntent {
     ReplaceAll,
@@ -713,17 +719,20 @@ pub(crate) enum AppEvent {
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+        persistence: ModelSelectionPersistence,
     },
 
     /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
     OpenPlanReasoningScopePrompt {
         model: String,
         effort: Option<ReasoningEffort>,
+        persistence: ModelSelectionPersistence,
     },
 
     /// Open the full model picker (non-auto models).
     OpenAllModelsPopup {
         models: Vec<ModelPreset>,
+        persistence: ModelSelectionPersistence,
     },
 
     /// Open the confirmation prompt before enabling full access mode.

@@ -13,6 +13,8 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    #[strum(serialize = "modelp")]
+    ModelPersistent,
     Ide,
     Permissions,
     Keymap,
@@ -113,7 +115,10 @@ impl SlashCommand {
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
-            SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Model => "choose what model and reasoning effort to use for this session",
+            SlashCommand::ModelPersistent => {
+                "choose what model and reasoning effort to save as the default"
+            }
             SlashCommand::Ide => {
                 "include current selection, open files, and other context from your IDE"
             }
@@ -195,6 +200,7 @@ impl SlashCommand {
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Model
+            | SlashCommand::ModelPersistent
             | SlashCommand::Personality
             | SlashCommand::Permissions
             | SlashCommand::Keymap
@@ -283,6 +289,24 @@ mod tests {
     fn pet_alias_parses_to_pets_command() {
         assert_eq!(SlashCommand::Pets.command(), "pets");
         assert_eq!(SlashCommand::from_str("pet"), Ok(SlashCommand::Pets));
+    }
+
+    #[test]
+    fn model_persistent_command_is_visible_and_unavailable_during_task() {
+        assert_eq!(SlashCommand::Model.command(), "model");
+        assert_eq!(SlashCommand::ModelPersistent.command(), "modelp");
+        assert_eq!(
+            SlashCommand::from_str("modelp"),
+            Ok(SlashCommand::ModelPersistent)
+        );
+        assert!(!SlashCommand::ModelPersistent.available_during_task());
+        assert!(!SlashCommand::ModelPersistent.available_in_side_conversation());
+        assert!(
+            super::built_in_slash_commands()
+                .iter()
+                .any(|(name, command)| *name == "modelp"
+                    && *command == SlashCommand::ModelPersistent)
+        );
     }
 
     #[test]
