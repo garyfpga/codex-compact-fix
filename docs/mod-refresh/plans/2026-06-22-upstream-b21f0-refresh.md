@@ -151,6 +151,22 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
   - Checked metadata remains pinned to `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225` / `1`.
   - Coordinator approved continuing pinned to `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225`; the newer `566f7bf...` upstream tip is intentionally excluded from this release.
 
+## Build verification log
+- Latest stable upstream release recheck before build: `0.141.0`.
+- Derived release version: `0.141.b21f0.1.mod`.
+- Build command: `CODEX_CLI_RELEASE_VERSION="0.141.b21f0.1.mod" cargo build -p codex-cli --release` from `codex-rs`.
+- Build result: passed; Cargo finished the `release` profile in `10m 06s`.
+- Build warnings:
+  - `codex-api`: unused `stream_encoded` and `stream_encoded_json_with` methods.
+  - `codex-app-server`: unused `mut loader_overrides`.
+- Artifact copy: `codex-rs/target/release/codex` to repository-root `codex`.
+- Artifact version check: `./codex --version` returned `codex-cli 0.141.b21f0.1.mod`.
+- Artifact size: `1.2G`.
+- Artifact SHA-256: `c2f1619dbeb5f30199e2b32dcac0a95644fc66e772fc6cad417a0b76189c54e1`.
+- Artifact git status: repository-root `codex` and `codex-rs/target/` are ignored.
+- Skipped-test status: no tests were explicitly requested, so no `just test` or `cargo test` command was run.
+- Skipped-Bazel status: no Bazel build or Bazel test command was run.
+
 ## Publish details
 - Publish repository: `garyfpga/codex-compact-fix`.
 - Artifact path and uploaded asset name: `codex`.
