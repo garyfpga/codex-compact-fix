@@ -111,6 +111,45 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
 - Tests: not run unless explicitly requested.
 - Bazel: not used; using Cargo release build only.
 
+## Merge preservation log
+- Real merge command: `git merge upstream/main`.
+- Upstream target confirmed before merge: `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225`.
+- Conflict files matched preflight:
+  - `codex-rs/core/src/compact_remote.rs`
+  - `codex-rs/core/src/config/mod.rs`
+  - `codex-rs/tui/src/app/event_dispatch.rs`
+  - `codex-rs/tui/src/chatwidget/tests/slash_commands.rs`
+  - `codex-rs/tui/src/slash_command.rs`
+- Conflict resolution summary:
+  - Preserved fork-local V1 `run_remote_compaction_request_v1(...)` so V1 compact keeps explicit retry, timeout, TCP keepalive, and no-hidden-retry behavior.
+  - Accepted upstream `AutoCompactWindowIds` handling for compacted item window metadata.
+  - Preserved `resolve_remote_compact_config(...)` and added upstream `resolve_token_budget_config(...)`; `Config::load` now resolves both.
+  - Preserved persistence-aware model picker events and accepted upstream `SettingsSelectionClosed` / `SettingsSelectionSettled` queue-settling behavior.
+  - Made `/modelp` follow upstream's queue-safe settings command behavior and added the missing `defer_input_until_settings_applied()` call after `open_model_popup_persistent()`.
+  - Preserved `/model` session-only and `/modelp` persistent selection behavior.
+- Adjacent merge integration fixes:
+  - `codex-rs/core/src/session/turn.rs` now reads auto-compaction feature state from `turn_context.config.features`, matching this branch's `TurnContext` shape.
+  - `codex-rs/thread-manager-sample/src/main.rs` initializes the fork-local `remote_compact` config field with `Default::default()`.
+- Metadata:
+  - `upstreamhash.txt` updated to `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225`.
+  - `modversion.txt` remains `1`.
+- Maintenance commands:
+  - `cd codex-rs && just fmt`: passed.
+  - `cd codex-rs && just write-config-schema`: initially exposed the `turn_context.features` merge issue; passed after the fix.
+  - `just bazel-lock-update`: passed with existing crate-annotation warnings.
+  - `just bazel-lock-check`: passed.
+  - `cd codex-rs && just fix`: initially required installing `libcap-devel`, then exposed the `thread-manager-sample` config issue; passed after fixes.
+- Environment maintenance:
+  - Installed `libcap-devel` with `sudo -n dnf install -y libcap-devel` so `codex-bwrap` can compile through pkg-config.
+- Skipped-test status: no tests were explicitly requested, so no `just test` or `cargo test` command was run.
+- Skipped-Bazel status: no Bazel build or Bazel test command was run; only lock maintenance ran because Rust dependency files changed.
+- Stop-gate note:
+  - After the real merge was staged and preservation review passed, local `upstream/main` advanced to `566f7bf6314cbf213de523a0268d8df89f93ef62`.
+  - Current `MERGE_HEAD` remains the planned target `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225`.
+  - Checked metadata remains pinned to `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225` / `1`.
+  - The release is paused before merge commit, build, tag, or publish for coordinator direction on whether to continue pinned to `b21f0e...` or refresh to the newer `566f7bf...` target.
+  - Coordinator approved continuing pinned to `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225`.
+
 ## Publish details
 - Publish repository: `garyfpga/codex-compact-fix`.
 - Artifact path and uploaded asset name: `codex`.

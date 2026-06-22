@@ -195,14 +195,9 @@ impl SlashCommand {
             SlashCommand::New
             | SlashCommand::Archive
             | SlashCommand::Delete
-            | SlashCommand::Resume
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
-            | SlashCommand::Model
-            | SlashCommand::ModelPersistent
-            | SlashCommand::Personality
-            | SlashCommand::Permissions
             | SlashCommand::Keymap
             | SlashCommand::Vim
             | SlashCommand::ElevateSandbox
@@ -217,6 +212,11 @@ impl SlashCommand {
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
+            | SlashCommand::Resume
+            | SlashCommand::Model
+            | SlashCommand::ModelPersistent
+            | SlashCommand::Personality
+            | SlashCommand::Permissions
             | SlashCommand::Copy
             | SlashCommand::Raw
             | SlashCommand::Rename
@@ -292,14 +292,14 @@ mod tests {
     }
 
     #[test]
-    fn model_persistent_command_is_visible_and_unavailable_during_task() {
+    fn model_persistent_command_is_visible_and_available_during_task() {
         assert_eq!(SlashCommand::Model.command(), "model");
         assert_eq!(SlashCommand::ModelPersistent.command(), "modelp");
         assert_eq!(
             SlashCommand::from_str("modelp"),
             Ok(SlashCommand::ModelPersistent)
         );
-        assert!(!SlashCommand::ModelPersistent.available_during_task());
+        assert!(SlashCommand::ModelPersistent.available_during_task());
         assert!(!SlashCommand::ModelPersistent.available_in_side_conversation());
         assert!(
             super::built_in_slash_commands()
