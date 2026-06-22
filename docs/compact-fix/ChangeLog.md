@@ -19,6 +19,7 @@ The inventory below intentionally excludes `docs/compact-fix/ChangeLog.md` and `
 - Keep V2 policy parity with the shared wrapper, including the version-specific attempt budget and warning labels.
 - Keep the compact integration tests and snapshots current whenever request shape or fallback text changes.
 - Keep the TUI version label display-only and aligned with `CODEX_CLI_RELEASE_VERSION`, preserving binary/TUI `.mod` version consistency with Cargo package fallback for local builds.
+- Keep `/model` session-only and `/modelp` persistent, including nested model, reasoning, and Plan-mode picker paths.
 - Keep the Simple Power plan trail intact so future merge agents can read the rationale before changing code.
 
 ## Behavior Changes
@@ -271,6 +272,44 @@ Future merge agents need the human-approved intent, not just the code, when deci
 - Read these plans before resolving any later upstream merge that touches compact or the TUI version label.
 - Update this section if the preserved behavior set changes in a new approved plan.
 
+### 11. Session-only `/model` and persistent `/modelp`
+**Files**
+- `codex-rs/tui/src/app_event.rs`
+- `codex-rs/tui/src/slash_command.rs`
+- `codex-rs/tui/src/chatwidget/model_popups.rs`
+- `codex-rs/tui/src/chatwidget/slash_dispatch.rs`
+- `codex-rs/tui/src/app/event_dispatch.rs`
+- `codex-rs/tui/src/bottom_pane/slash_commands.rs`
+- `codex-rs/tui/src/bottom_pane/command_popup.rs`
+- `codex-rs/tui/src/chatwidget/tests/plan_mode.rs`
+- `codex-rs/tui/src/chatwidget/tests/popups_and_settings.rs`
+- `codex-rs/tui/src/chatwidget/tests/slash_commands.rs`
+- `codex-rs/tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__chat_composer__tests__slash_popup_mo.snap`
+- `codex-rs/tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__command_popup__tests__command_popup_default_items.snap`
+- `codex-rs/tui/tooltips.txt`
+- `docs/simplepower/plans/2026-06-22-modelp-persistent-model-command.md`
+
+**Current anchors**
+- `codex-rs/tui/src/app_event.rs:131-136, 719-736`
+- `codex-rs/tui/src/slash_command.rs:13-18, 115-122, 200-207`
+- `codex-rs/tui/src/chatwidget/model_popups.rs:7-21, 250-284, 324-386, 414-620`
+- `codex-rs/tui/src/chatwidget/slash_dispatch.rs:264-270, 1063-1067`
+- `codex-rs/tui/src/app/event_dispatch.rs:892-913`
+- `codex-rs/tui/src/bottom_pane/slash_commands.rs:86-98, 247-268`
+- `docs/simplepower/plans/2026-06-22-modelp-persistent-model-command.md:20-32, 34-51`
+
+**What changed**
+`/model` now opens the model picker in `ModelSelectionPersistence::Temporary` mode, which updates the active runtime model and reasoning effort without emitting `PersistModelSelection` or `PersistPlanModeReasoningEffort`. A visible `/modelp` command opens the same picker in `ModelSelectionPersistence::Persist` mode, preserving config persistence for selected model and reasoning defaults. The persistence mode is carried through the quick model picker, all-models picker, reasoning picker, and Plan-mode scope prompt so nested selections cannot accidentally switch back to the old `/model` write behavior.
+
+**Why**
+The fork wants fast session-local model switching without mutating `config.toml`, while still keeping an explicit command for changing the saved default. Future upstream merges or release refreshes that touch the model picker, slash command list, or TUI config persistence must preserve that split.
+
+**Future merge notes**
+- Preserve `/model` as session-only: it must not emit `PersistModelSelection` or `PersistPlanModeReasoningEffort`.
+- Preserve `/modelp` as the visible persistent command and keep it wired through nested picker events.
+- Keep service-tier pseudo-commands inserted immediately after `/model`; `/modelp` follows those pseudo-commands when they are enabled.
+- Keep tests and snapshots current for temporary selection, persistent selection, Plan-mode scope behavior, slash-command availability, command popup filtering, and `/modelp` visibility.
+
 ## Changed File Inventory
 ```text
 M	codex-rs/codex-api/src/endpoint/compact.rs
@@ -298,15 +337,29 @@ M	codex-rs/core/tests/suite/snapshots/all__suite__compact_remote__remote_pre_tur
 M	codex-rs/login/src/auth/default_client.rs
 M	codex-rs/login/src/auth/default_client_tests.rs
 M	codex-rs/tui/src/bottom_pane/status_surface_preview.rs
+M	codex-rs/tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__chat_composer__tests__slash_popup_mo.snap
+M	codex-rs/tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__command_popup__tests__command_popup_default_items.snap
+M	codex-rs/tui/src/app/event_dispatch.rs
+M	codex-rs/tui/src/app_event.rs
+M	codex-rs/tui/src/bottom_pane/command_popup.rs
+M	codex-rs/tui/src/bottom_pane/slash_commands.rs
 A	codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__status_surface_previews_codex_version.snap
+M	codex-rs/tui/src/chatwidget/model_popups.rs
+M	codex-rs/tui/src/chatwidget/slash_dispatch.rs
 M	codex-rs/tui/src/chatwidget/status_surfaces.rs
+M	codex-rs/tui/src/chatwidget/tests/plan_mode.rs
+M	codex-rs/tui/src/chatwidget/tests/popups_and_settings.rs
+M	codex-rs/tui/src/chatwidget/tests/slash_commands.rs
 M	codex-rs/tui/src/chatwidget/tests/status_surface_previews.rs
+M	codex-rs/tui/src/slash_command.rs
 M	codex-rs/tui/src/version.rs
+M	codex-rs/tui/tooltips.txt
 A	docs/simplepower/plans/2026-06-08-compact-fast-service-tier-override.md
 A	docs/simplepower/plans/2026-06-08-remote-compact-timeout-fallback.md
 A	docs/simplepower/plans/2026-06-08-v1-remote-compact-config.md
 A	docs/simplepower/plans/2026-06-09-v2-remote-compact-policy.md
 A	docs/simplepower/plans/2026-06-11-upstream-main-compact-preserve-gary-version.md
+A	docs/simplepower/plans/2026-06-22-modelp-persistent-model-command.md
 ```
 
 ## Future Upstream Merge Procedure
@@ -317,4 +370,5 @@ A	docs/simplepower/plans/2026-06-11-upstream-main-compact-preserve-gary-version.
 5. If a merge changes any `ConfigToml` or `remote_compact` shape, regenerate the schema before claiming the merge is done.
 6. If a merge changes request shape or warning text, update the compact tests and snapshots in the same change.
 7. If a merge touches the TUI version label or release metadata path, update the display snapshot and keep binary/TUI `.mod` version consistency.
-8. After the merge is stable, update this changelog so the next agent starts from the current fork delta instead of a stale summary.
+8. If a merge touches model picker, slash command, or TUI config-persistence paths, verify `/model` remains session-only and `/modelp` remains the persistent default-saving command.
+9. After the merge is stable, update this changelog so the next agent starts from the current fork delta instead of a stale summary.
