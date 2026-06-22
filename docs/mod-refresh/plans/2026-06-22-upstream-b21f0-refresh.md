@@ -169,6 +169,7 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
 
 ## Publish details
 - Publish repository: `garyfpga/codex-compact-fix`.
+- `gh` repository selection must be explicit: use `--repo garyfpga/codex-compact-fix` for release commands because implicit `gh` repo detection in this checkout may resolve to `openai/codex`.
 - Artifact path and uploaded asset name: `codex`.
 - Tag and title: `0.141.b21f0.1.mod`.
 - Release notes source: `docs/mod-refresh/plans/2026-06-22-upstream-b21f0-release-notes.md`.
