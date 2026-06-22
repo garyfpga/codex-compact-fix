@@ -114,6 +114,8 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
 ## Merge preservation log
 - Real merge command: `git merge upstream/main`.
 - Upstream target confirmed before merge: `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225`.
+- Merge commit: `341b2c1160897679612506f0128787ecc487b85b`.
+- Merge commit second parent: `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225`.
 - Conflict files matched preflight:
   - `codex-rs/core/src/compact_remote.rs`
   - `codex-rs/core/src/config/mod.rs`
@@ -145,10 +147,9 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
 - Skipped-Bazel status: no Bazel build or Bazel test command was run; only lock maintenance ran because Rust dependency files changed.
 - Stop-gate note:
   - After the real merge was staged and preservation review passed, local `upstream/main` advanced to `566f7bf6314cbf213de523a0268d8df89f93ef62`.
-  - Current `MERGE_HEAD` remains the planned target `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225`.
+  - The merge commit's upstream parent remains the planned target `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225`.
   - Checked metadata remains pinned to `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225` / `1`.
-  - The release is paused before merge commit, build, tag, or publish for coordinator direction on whether to continue pinned to `b21f0e...` or refresh to the newer `566f7bf...` target.
-  - Coordinator approved continuing pinned to `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225`.
+  - Coordinator approved continuing pinned to `b21f0e7a98c05a570cc227e2ec62a2e29c3a7225`; the newer `566f7bf...` upstream tip is intentionally excluded from this release.
 
 ## Publish details
 - Publish repository: `garyfpga/codex-compact-fix`.
