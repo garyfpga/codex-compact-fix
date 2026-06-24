@@ -128,6 +128,45 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
 - Tests: not run unless explicitly requested.
 - Bazel: not used; using Cargo release build only.
 
+## Merge preservation results
+- Real merge commit: `3bcdd57e2640d1f06917cdc27413bd0d44243c20`.
+- Upstream merged: `upstream/main` at `283bc4cf011047314b4804c0f1ccd06e4f6a95c5`.
+- Merge command: `git merge upstream/main`.
+- Conflicts resolved:
+  - `codex-rs/core/src/client.rs`
+  - `codex-rs/core/src/compact.rs`
+  - `codex-rs/core/src/compact_remote.rs`
+  - `codex-rs/core/src/compact_remote_v2.rs`
+  - `codex-rs/core/src/lib.rs`
+  - `codex-rs/core/src/session/turn.rs`
+  - `codex-rs/login/src/auth/default_client.rs`
+- Merge-conflict worker reviewed the conflict set before resolution and called out the need to adapt the compact fallback wrapper to upstream `StepContext` plumbing.
+- Preservation summary:
+  - `client.rs` keeps the compact-specific retry policy, timeout, TCP keepalive, and request builder while preserving upstream session telemetry, originator, and request mapping changes.
+  - `compact.rs` combines upstream world-state initial context injection with fork-local pre-compact hook policy and local run settings.
+  - `compact_remote.rs` and `compact_remote_v2.rs` preserve V1/V2 bounded visible attempts, no hidden compact retries, timeout handling, service-tier behavior, warnings, and fallback ownership while adapting remote compaction to `StepContext`.
+  - `remote_compact_fallback.rs` now owns the remote-capable manual and auto compact entry points, including the `Feature::TokenBudget` branch before dispatching to token-budget reset behavior.
+  - `session/turn.rs` preserves upstream new-context-window handling and routes remote-capable auto compaction through `run_remote_first_auto_compact`.
+  - `login/src/auth/default_client.rs` keeps the fork TCP keepalive and fallback builders while preserving upstream route-aware auth builders.
+- Metadata after merge:
+  - `upstreamhash.txt`: `283bc4cf011047314b4804c0f1ccd06e4f6a95c5`
+  - `modversion.txt`: `1`
+- Conflict checks before merge commit:
+  - `git diff --name-only --diff-filter=U`: no output.
+  - `git diff --cached --check`: no output.
+  - `rg -n "<<<<<<<|=======|>>>>>>>"` on resolved compact/auth conflict files and metadata files: no matches.
+- Maintenance commands run after resolving conflicts:
+  - `cd codex-rs && just fmt`: passed.
+  - `cd codex-rs && just write-config-schema`: initially exposed compile errors in compact merge resolution; after fixes, passed.
+  - `just bazel-lock-update`: passed as dependency lock maintenance only.
+  - `just bazel-lock-check`: passed as dependency lock maintenance only.
+  - `cd codex-rs && just fix`: passed with non-fatal existing `too_many_arguments` warnings, plus one unused helper warning that was removed.
+  - `cd codex-rs && just fmt`: passed after the token-budget fallback fix.
+  - `cd codex-rs && just fix -p codex-core`: passed with non-fatal existing `too_many_arguments` warnings for compact remote entry points.
+- Compact preservation reviewer initially found one P1: remote-capable token-budget compaction bypassed the shared fallback wrapper. The fix routes remote-capable manual and auto token-budget compact through `run_remote_first_compact`; the follow-up reviewer reported no findings and cleared the merge for the next release step.
+- Tests: not run unless explicitly requested.
+- Bazel: no Bazel build or test was run; Bazel was used only for dependency lock maintenance commands required by dependency changes.
+
 ## Build details
 - Build command: `CODEX_CLI_RELEASE_VERSION="0.142.283bc.1.mod" cargo build -p codex-cli --release` from `codex-rs`.
 - Expected Linux CLI binary path: `codex-rs/target/release/codex`.
