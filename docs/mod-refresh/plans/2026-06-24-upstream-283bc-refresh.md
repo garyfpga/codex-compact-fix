@@ -193,6 +193,13 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
 - Artifact size: `1280137616` bytes.
 - Artifact SHA-256: `3ba5e7b0dc91801b1327c69174b6aba55d04f18d61e58fb956bdddaf0f67f40c`.
 - Artifact version check: `./codex --version` returned exactly `codex-cli 0.142.283bc.1.mod`.
+- After this build result was recorded and committed, the same release build command was rerun on publish HEAD `7c0c07779c7356194d4965886c064797f2c9f4f7`; it passed in 1.26s with the same non-fatal warnings.
+- The repository-root artifact was refreshed after that final-HEAD rebuild and still reported:
+  - `./codex --version`: `codex-cli 0.142.283bc.1.mod`
+  - Mode: `755`
+  - Size: `1280137616` bytes
+  - SHA-256: `3ba5e7b0dc91801b1327c69174b6aba55d04f18d61e58fb956bdddaf0f67f40c`
+- Build-verifier result: no findings. It verified the metadata, recorded version, formatting, Cargo release command, skipped tests, no Bazel build/test usage, source binary path, copied artifact, executable bit, size, SHA-256, and exact `./codex --version` output.
 - Tests: not run unless explicitly requested.
 - Bazel: no Bazel build or test was run; release validation used the Cargo release build path only.
 
