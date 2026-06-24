@@ -3,8 +3,8 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::RequestId;
+use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_exec_server_protocol::RequestId;
 use serde_json::to_value;
 use std::collections::HashSet;
 use tokio::sync::Mutex;
@@ -66,6 +66,7 @@ pub(crate) struct ExecServerHandler {
     background_task_shutdown: CancellationToken,
     background_tasks: TaskTracker,
     file_system: FileSystemHandler,
+    runtime_paths: ExecServerRuntimePaths,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
@@ -83,7 +84,8 @@ impl ExecServerHandler {
             active_body_stream_ids: Mutex::new(HashSet::new()),
             background_task_shutdown: CancellationToken::new(),
             background_tasks: TaskTracker::new(),
-            file_system: FileSystemHandler::new(runtime_paths),
+            file_system: FileSystemHandler::new(runtime_paths.clone()),
+            runtime_paths,
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
         }
@@ -116,7 +118,11 @@ impl ExecServerHandler {
 
         let session = match self
             .session_registry
-            .attach(params.resume_session_id.clone(), self.notifications.clone())
+            .attach(
+                params.resume_session_id.clone(),
+                self.notifications.clone(),
+                self.runtime_paths.clone(),
+            )
             .await
         {
             Ok(session) => session,

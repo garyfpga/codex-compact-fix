@@ -176,7 +176,7 @@ fn compacted_summary_only_output(summary: &str) -> Vec<ResponseItem> {
     vec![ResponseItem::Compaction {
         id: None,
         encrypted_content: summary_with_prefix(summary),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }]
 }
 
@@ -566,7 +566,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     let compacted_history = vec![ResponseItem::Compaction {
         id: None,
         encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
@@ -3669,7 +3669,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
         ResponseItem::Compaction {
             id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
             id: None,
@@ -3678,7 +3678,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 text: "COMPACTED_ASSISTANT_NOTE".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -3820,12 +3820,12 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
                 text: stale_developer_message.to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Compaction {
             id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -3963,12 +3963,12 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
                 text: stale_developer_message.to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Compaction {
             id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -5404,7 +5404,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinject
     let compacted_history = vec![ResponseItem::Compaction {
         id: None,
         encrypted_content: summary_with_prefix("REMOTE_SUMMARY_ONLY"),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),

@@ -6,7 +6,6 @@ use crate::is_openai_curated_marketplace_name;
 use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
-use crate::loader::installed_plugin_telemetry_metadata;
 use crate::loader::load_plugin_apps_from_manifest;
 use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_hooks_from_layer_stack;
@@ -15,7 +14,7 @@ use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::log_plugin_load_errors;
 use crate::loader::materialize_marketplace_plugin_source;
-use crate::loader::plugin_telemetry_metadata_from_root;
+use crate::loader::plugin_capability_summary_from_root;
 use crate::loader::refresh_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
@@ -709,6 +708,97 @@ impl PluginsManager {
         remote_installed_plugins_to_config(plugins, &self.store)
     }
 
+    fn remote_plugin_id_for(&self, plugin_id: &PluginId) -> Option<String> {
+        let cached_remote_plugin_id = {
+            let cache = match self.remote_installed_plugins_cache.read() {
+                Ok(cache) => cache,
+                Err(err) => err.into_inner(),
+            };
+            cache.as_ref().and_then(|plugins| {
+                plugins.iter().find_map(|plugin| {
+                    (plugin.name == plugin_id.plugin_name
+                        && plugin.marketplace_name == plugin_id.marketplace_name)
+                        .then(|| plugin.id.clone())
+                })
+            })
+        };
+        if cached_remote_plugin_id.is_some() {
+            return cached_remote_plugin_id;
+        }
+
+        match self.store.remote_plugin_id(plugin_id) {
+            Ok(remote_plugin_id) => remote_plugin_id,
+            Err(err) => {
+                tracing::warn!(
+                    plugin_id = %plugin_id.as_key(),
+                    error = %err,
+                    "failed to read persisted remote plugin identity"
+                );
+                None
+            }
+        }
+    }
+
+    pub async fn telemetry_metadata_for_installed_plugin(
+        &self,
+        plugin_id: &PluginId,
+    ) -> PluginTelemetryMetadata {
+        let mut metadata = self.telemetry_metadata_for_plugin_id(plugin_id);
+        metadata.capability_summary = match self.store.active_plugin_root(plugin_id) {
+            Some(plugin_root) => plugin_capability_summary_from_root(plugin_id, &plugin_root).await,
+            None => None,
+        };
+        metadata
+    }
+
+    pub async fn telemetry_metadata_for_installed_plugin_with_remote_id(
+        &self,
+        plugin_id: &PluginId,
+        remote_plugin_id: &str,
+    ) -> PluginTelemetryMetadata {
+        let mut metadata =
+            self.telemetry_metadata_for_plugin_id_with_remote_id(plugin_id, remote_plugin_id);
+        metadata.capability_summary = match self.store.active_plugin_root(plugin_id) {
+            Some(plugin_root) => plugin_capability_summary_from_root(plugin_id, &plugin_root).await,
+            None => None,
+        };
+        metadata
+    }
+
+    pub fn telemetry_metadata_for_plugin_id(
+        &self,
+        plugin_id: &PluginId,
+    ) -> PluginTelemetryMetadata {
+        PluginTelemetryMetadata {
+            plugin_id: Some(plugin_id.clone()),
+            remote_plugin_id: self.remote_plugin_id_for(plugin_id),
+            capability_summary: None,
+        }
+    }
+
+    pub fn telemetry_metadata_for_plugin_id_with_remote_id(
+        &self,
+        plugin_id: &PluginId,
+        remote_plugin_id: &str,
+    ) -> PluginTelemetryMetadata {
+        PluginTelemetryMetadata {
+            remote_plugin_id: Some(remote_plugin_id.to_string()),
+            ..self.telemetry_metadata_for_plugin_id(plugin_id)
+        }
+    }
+
+    pub fn telemetry_metadata_for_capability_summary(
+        &self,
+        summary: &PluginCapabilitySummary,
+    ) -> Option<PluginTelemetryMetadata> {
+        let plugin_id = PluginId::parse(&summary.config_name).ok()?;
+        Some(PluginTelemetryMetadata {
+            remote_plugin_id: self.remote_plugin_id_for(&plugin_id),
+            plugin_id: Some(plugin_id),
+            capability_summary: Some(summary.clone()),
+        })
+    }
+
     pub fn build_remote_installed_plugin_marketplaces_from_cache(
         &self,
         visible_marketplaces: &[&str],
@@ -1281,7 +1371,7 @@ impl PluginsManager {
         };
         if let Some(analytics_events_client) = analytics_events_client {
             analytics_events_client.track_plugin_install_failed(
-                PluginTelemetryMetadata::from_plugin_id(plugin_id),
+                self.telemetry_metadata_for_plugin_id(plugin_id),
                 error_type.to_string(),
             );
         }
@@ -1351,7 +1441,7 @@ impl PluginsManager {
         };
         if let Some(analytics_events_client) = analytics_events_client {
             analytics_events_client.track_plugin_installed(
-                plugin_telemetry_metadata_from_root(&result.plugin_id, &result.installed_path)
+                self.telemetry_metadata_for_installed_plugin(&result.plugin_id)
                     .await,
             );
         }
@@ -1392,7 +1482,10 @@ impl PluginsManager {
 
     async fn uninstall_plugin_id(&self, plugin_id: PluginId) -> Result<(), PluginUninstallError> {
         let plugin_telemetry = if self.store.active_plugin_root(&plugin_id).is_some() {
-            Some(installed_plugin_telemetry_metadata(self.codex_home.as_path(), &plugin_id).await)
+            Some(
+                self.telemetry_metadata_for_installed_plugin(&plugin_id)
+                    .await,
+            )
         } else {
             None
         };

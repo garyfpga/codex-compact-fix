@@ -1,6 +1,6 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_exec_server_protocol::JSONRPCErrorError;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io;
@@ -314,8 +314,9 @@ mod tests {
 
     #[test]
     fn helper_protocol_uses_path_uris() -> serde_json::Result<()> {
-        let local_path = PathUri::from_path(std::env::current_dir().expect("cwd").join("file"))
-            .expect("path URI");
+        let local_path =
+            PathUri::from_host_native_path(std::env::current_dir().expect("cwd").join("file"))
+                .expect("path URI");
         let paths = [
             local_path,
             PathUri::parse("file://server/share/file").expect("path URI"),

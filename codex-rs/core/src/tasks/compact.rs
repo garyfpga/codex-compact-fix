@@ -9,6 +9,7 @@ use crate::remote_compact_fallback::run_remote_first_manual_compact;
 use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
+use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
@@ -44,6 +45,8 @@ impl SessionTask for CompactTask {
                 RemoteCompactVersion::V1
             };
             run_remote_first_manual_compact(session.clone(), ctx, version).await
+        } else if ctx.config.features.enabled(Feature::TokenBudget) {
+            crate::compact_token_budget::run_manual_compact_task(session, ctx).await
         } else {
             emit_compact_metric(
                 &session.services.session_telemetry,

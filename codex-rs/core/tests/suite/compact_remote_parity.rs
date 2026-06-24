@@ -255,22 +255,6 @@ fn assert_capture_eq(label: &str, legacy: &Capture, v2: &Capture) {
     );
 }
 
-fn assert_follow_up_and_history_eq(label: &str, legacy: &Capture, v2: &Capture) {
-    let legacy_follow_up = follow_up_request_view(&legacy.follow_up_body);
-    let v2_follow_up = follow_up_request_view(&v2.follow_up_body);
-    assert_json_eq(
-        &format!("post-compact follow-up request parity mismatch for {label}"),
-        &legacy_follow_up,
-        &v2_follow_up,
-    );
-
-    assert_json_eq(
-        &format!("replacement history parity mismatch for {label}"),
-        &legacy.replacement_history,
-        &v2.replacement_history,
-    );
-}
-
 async fn run_manual_session(
     scenario: &Scenario,
     mode: Mode,
@@ -905,6 +889,7 @@ fn normalize_value(value: Value) -> Value {
         Value::Array(values) => Value::Array(values.into_iter().map(normalize_value).collect()),
         Value::Object(map) => Value::Object(
             map.into_iter()
+                .filter(|(key, _value)| key != "internal_chat_message_metadata_passthrough")
                 .map(|(key, value)| (key, normalize_value(value)))
                 .collect(),
         ),
