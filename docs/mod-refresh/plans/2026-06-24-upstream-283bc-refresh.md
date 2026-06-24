@@ -173,6 +173,29 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
 - Expected copied artifact path: `codex`.
 - Expected version output: `codex-cli 0.142.283bc.1.mod`.
 
+## Build verification results
+- Metadata version recomputed before build:
+  - Latest stable upstream release: `0.142.0`
+  - Base series: `0.142`
+  - Upstream SHA: `283bc4cf011047314b4804c0f1ccd06e4f6a95c5`
+  - Mod version: `1`
+  - Upstream short: `283bc`
+  - Computed version: `0.142.283bc.1.mod`
+- Formatting command before build: `just fmt` from `codex-rs`; passed.
+- Cargo release build command: `CODEX_CLI_RELEASE_VERSION="0.142.283bc.1.mod" cargo build -p codex-cli --release` from `codex-rs`; passed in 10m 48s.
+- Build warnings did not fail the release build:
+  - `codex-api`: two existing dead-code warnings for encoded stream helpers.
+  - `codex-app-server`: one existing `unused_mut` warning.
+- Source binary path: `codex-rs/target/release/codex`.
+- Copy command: `cp -p codex-rs/target/release/codex codex && chmod +x codex`.
+- Repository-root artifact path: `codex`.
+- Artifact mode: `755`.
+- Artifact size: `1280137616` bytes.
+- Artifact SHA-256: `3ba5e7b0dc91801b1327c69174b6aba55d04f18d61e58fb956bdddaf0f67f40c`.
+- Artifact version check: `./codex --version` returned exactly `codex-cli 0.142.283bc.1.mod`.
+- Tests: not run unless explicitly requested.
+- Bazel: no Bazel build or test was run; release validation used the Cargo release build path only.
+
 ## Publish details
 - Publish repository: `garyfpga/codex-compact-fix`.
 - `gh` repository selection must be explicit: use `--repo garyfpga/codex-compact-fix` for release commands because implicit `gh` repo detection in this checkout may resolve to `openai/codex`.
