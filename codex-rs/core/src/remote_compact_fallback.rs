@@ -147,7 +147,7 @@ async fn run_remote_first_compact(
     version: RemoteCompactVersion,
 ) -> CodexResult<()> {
     if turn_context.config.features.enabled(Feature::TokenBudget) {
-        return run_token_budget_compact(sess, turn_context, kind).await;
+        return run_token_budget_compact(sess, step_context, turn_context, kind).await;
     }
 
     let compact_service_tiers = resolve_remote_first_compact_service_tiers(&sess, &turn_context);
@@ -246,6 +246,7 @@ async fn run_remote_first_compact(
 
 async fn run_token_budget_compact(
     sess: Arc<Session>,
+    step_context: Arc<StepContext>,
     turn_context: Arc<TurnContext>,
     kind: RemoteCompactKind,
 ) -> CodexResult<()> {
@@ -256,7 +257,7 @@ async fn run_token_budget_compact(
         } => {
             compact_token_budget::run_inline_auto_compact_task(
                 sess,
-                turn_context,
+                step_context,
                 initial_context_injection,
             )
             .await

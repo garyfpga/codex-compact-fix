@@ -145,6 +145,42 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
 - Tests: not run unless explicitly requested.
 - Bazel: not used; using Cargo release build only.
 
+## Merge preservation results
+- Real merge commit: pending until the merge commit is created.
+- Upstream merged: `upstream/main` at `cfead68e5d3984b247cf0758e3e53b19165de848`.
+- Merge command: `git merge upstream/main`.
+- Conflicts resolved:
+  - `codex-rs/core/src/client.rs`
+  - `codex-rs/core/src/compact_remote.rs`
+  - `codex-rs/core/src/compact_token_budget.rs`
+  - `codex-rs/core/tests/suite/compact_remote.rs`
+- Merge-conflict worker reviewed the conflict set and recommended preserving both fork-local compact retry/fallback behavior and upstream auth/step-context additions. It also flagged `AuthMode::BedrockApiKey` as adjacent to the fork's API-key service-tier omission contract.
+- Preservation summary:
+  - `client.rs` keeps the fork-local `ResponsesStreamRetryPolicy`, exact compact retry policy, compact TCP keepalive client builder, and compact request timeout fields while preserving upstream agent-identity telemetry, auth-mode, and `reasoning_effort_for_request` handling.
+  - `compact_remote.rs` keeps V1 visible attempt loops, zero hidden compact retries, configured timeout, TCP keepalive, fallback warnings, and request metadata while using upstream `codex_protocol::auth::AuthMode`.
+  - `compact_remote_v2.rs` and `compact_service_tier.rs` were aligned to upstream `codex_protocol::auth::AuthMode`.
+  - `compact_remote.rs`, `compact_remote_v2.rs`, and `compact_service_tier.rs` now treat `AuthMode::BedrockApiKey` like `AuthMode::ApiKey` for remote compact service-tier omission, matching upstream's API-key auth semantics and the fork's API-key compact request-shape contract.
+  - `compact_token_budget.rs` preserves `run_manual_compact_task_after_turn_started` for the shared remote-first fallback wrapper while adopting upstream `StepContext` world-state capture.
+  - `remote_compact_fallback.rs` routes token-budget auto compaction through the existing `StepContext` so the upstream token-budget API and fork-local remote-first token-budget fallback both remain coherent.
+  - `compact_remote.rs` test source keeps the fork fallback sentinels and upstream agent-identity fixture constants.
+  - `client_tests.rs` was updated with explicit compact timeout, TCP keepalive, and no-hidden-retry settings for `CompactConversationRequestSettings`.
+- Metadata after merge preservation:
+  - `upstreamhash.txt`: `cfead68e5d3984b247cf0758e3e53b19165de848`
+  - `modversion.txt`: `1`
+- Conflict checks:
+  - `git diff --name-only --diff-filter=U`: no output.
+  - `rg -n "<<<<<<<|=======|>>>>>>>"` on resolved compact files and metadata files: no matches.
+  - `git diff --check`: no output.
+- Maintenance commands run after resolving conflicts:
+  - `cd codex-rs && just fmt`: passed.
+  - `cd codex-rs && just write-config-schema`: initially exposed a `StepContext` merge adaptation error in `remote_compact_fallback.rs`; after fixing that, passed with existing non-fatal `codex-api` dead-code warnings.
+  - `just bazel-lock-update`: passed as dependency lock maintenance only, with Bazel crate-annotation warnings.
+  - `just bazel-lock-check`: passed as dependency lock maintenance only.
+  - `cd codex-rs && just fix -p codex-core`: initially exposed a `client_tests.rs` initializer missing compact request settings; after fixing that, passed with existing non-fatal `codex-api` dead-code warnings and known compact remote `too_many_arguments` warnings.
+  - `cd codex-rs && just fmt`: passed after the scoped fix command.
+- Tests: not run unless explicitly requested.
+- Bazel: no Bazel build or test was run; Bazel was used only for dependency lock maintenance commands required by dependency changes.
+
 ## Build details
 - Build command: `CODEX_CLI_RELEASE_VERSION="${version}" cargo build -p codex-cli --release` from `codex-rs`.
 - Expected Linux CLI binary path: `codex-rs/target/release/codex`.

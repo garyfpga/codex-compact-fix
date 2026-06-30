@@ -1,6 +1,6 @@
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use codex_app_server_protocol::AuthMode;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ServiceTier;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -13,7 +13,10 @@ pub(crate) fn resolve_remote_first_compact_service_tiers(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> RemoteFirstCompactServiceTier {
-    if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
+    if matches!(
+        sess.services.auth_manager.auth_mode(),
+        Some(AuthMode::ApiKey | AuthMode::BedrockApiKey)
+    ) {
         return RemoteFirstCompactServiceTier {
             remote_service_tier_override: None,
             local_fallback_service_tier_override: turn_context.config.service_tier.clone(),

@@ -30,7 +30,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
-use codex_app_server_protocol::AuthMode;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -307,7 +307,10 @@ async fn run_remote_compaction_request_v2(
             "V2 remote compact attempt"
         );
         let service_tier = settings.service_tier_override.clone().or_else(|| {
-            if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
+            if matches!(
+                sess.services.auth_manager.auth_mode(),
+                Some(AuthMode::ApiKey | AuthMode::BedrockApiKey)
+            ) {
                 None
             } else {
                 turn_context.config.service_tier.clone()

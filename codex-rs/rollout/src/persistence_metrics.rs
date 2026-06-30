@@ -227,8 +227,12 @@ fn rollout_item_type(item: &RolloutItem) -> String {
         RolloutItem::SessionMeta(_) => "session_meta".to_string(),
         RolloutItem::ResponseItem(item) => response_item_type(item).to_string(),
         RolloutItem::InterAgentCommunication(_) => "inter_agent_communication".to_string(),
+        RolloutItem::InterAgentCommunicationMetadata { .. } => {
+            "inter_agent_communication_metadata".to_string()
+        }
         RolloutItem::Compacted(_) => "compacted".to_string(),
         RolloutItem::TurnContext(_) => "turn_context".to_string(),
+        RolloutItem::WorldState(_) => "world_state".to_string(),
         RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => {
             format!("event.item_completed.{}", turn_item_type(&event.item))
         }
@@ -243,6 +247,10 @@ fn turn_item_type(item: &TurnItem) -> &'static str {
         TurnItem::AgentMessage(_) => "agent_message",
         TurnItem::Plan(_) => "plan",
         TurnItem::Reasoning(_) => "reasoning",
+        TurnItem::CommandExecution(_) => "command_execution",
+        TurnItem::DynamicToolCall(_) => "dynamic_tool_call",
+        TurnItem::CollabAgentToolCall(_) => "collab_agent_tool_call",
+        TurnItem::SubAgentActivity(_) => "sub_agent_activity",
         TurnItem::WebSearch(_) => "web_search",
         TurnItem::ImageView(_) => "image_view",
         TurnItem::Sleep(_) => "sleep",
