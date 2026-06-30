@@ -146,7 +146,7 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
 - Bazel: not used; using Cargo release build only.
 
 ## Merge preservation results
-- Real merge commit: pending until the merge commit is created.
+- Real merge commit: `8d7444f066160b5b46eba560fc46ff9a4167680b`.
 - Upstream merged: `upstream/main` at `cfead68e5d3984b247cf0758e3e53b19165de848`.
 - Merge command: `git merge upstream/main`.
 - Conflicts resolved:
