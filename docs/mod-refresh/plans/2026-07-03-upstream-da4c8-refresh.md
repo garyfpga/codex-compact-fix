@@ -195,6 +195,31 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
 - Expected copied artifact path: `codex`.
 - Expected version output: `codex-cli ${version}`.
 
+## Build verification results
+- Metadata version recomputed before build:
+  - Latest stable upstream release: `0.142.5`
+  - Base series: `0.142`
+  - Upstream SHA: `da4c8ca57d40b074bdc1b5b1218851100150c56b`
+  - Mod version: `1`
+  - Upstream short: `da4c8`
+  - Computed version: `0.142.da4c8.1.mod`
+- Formatting command before build: `just fmt` from `codex-rs`; passed.
+- Cargo release build command: `CODEX_CLI_RELEASE_VERSION="0.142.da4c8.1.mod" cargo build -p codex-cli --release` from `codex-rs`; passed in 10m 42s.
+- Build warnings did not fail the release build:
+  - `codex-api`: two existing dead-code warnings for encoded stream helpers.
+  - `codex-app-server`: one existing `unused_mut` warning.
+- Source binary path: `codex-rs/target/release/codex`.
+- Copy command: `cp -p codex-rs/target/release/codex codex && chmod +x codex`.
+- Repository-root artifact path: `codex` (ignored by `.gitignore`).
+- Artifact mode: `755`.
+- Artifact size: `1318688016` bytes.
+- Artifact SHA-256: `26045ac9d3ae0e1a10c6996ccc0152df15bc91f111ca0226121ef4ab9a6a67d4`.
+- Artifact version check: `./codex --version` returned exactly `codex-cli 0.142.da4c8.1.mod`.
+- Build-verifier result: no findings. It verified the metadata-derived version, formatting command, Cargo release command, skipped tests, no Bazel build/test usage, source binary path, byte identity between the source binary and root artifact, root artifact, executable bit, size, SHA-256, and exact `./codex --version` output.
+- Publish handoff gate: after this build note is committed, rerun the same Cargo release build on publish HEAD, refresh repository-root `codex`, and verify the same exact version before publish.
+- Tests: not run unless explicitly requested.
+- Bazel: no Bazel build or test was run; release validation used the Cargo release build path only.
+
 ## Publish details
 - Publish repository: `garyfpga/codex-compact-fix`.
 - `gh` repository selection must be explicit: use `--repo garyfpga/codex-compact-fix` for release commands because implicit `gh` repo detection in this checkout may resolve to `openai/codex`.
