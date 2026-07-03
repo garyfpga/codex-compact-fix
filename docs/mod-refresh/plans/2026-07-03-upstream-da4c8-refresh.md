@@ -165,6 +165,30 @@ Carry these `docs/compact-fix/ChangeLog.md` behavior groups into merge resolutio
 - Tests: not run unless explicitly requested.
 - Bazel: not used; using Cargo release build only.
 
+## Merge preservation results
+- Real merge commit: `fa5b27421cc0ad89c60621db0d3ccccbdc5f4dab`.
+- Upstream merged: `upstream/main` at `da4c8ca57d40b074bdc1b5b1218851100150c56b`.
+- Merge command: `git merge upstream/main`.
+- Conflicts: none.
+- Merge worker result: no missed compact-fix behavior choice; no required source edit beyond metadata, formatting, and dependency lock maintenance.
+- Preservation summary:
+  - Compact runtime modules, compact endpoints, `responses_retry.rs`, TUI version display, and `/model`/`/modelp` routing were not directly touched by upstream.
+  - `remote_compact` config/schema/tests remain intact.
+  - The shared remote-first fallback remains the compact policy owner.
+  - V1/V2 retry, timeout, service-tier, and TCP keepalive paths are unchanged.
+  - Upstream protocol/schema changes around `MultiAgentMode` match the preflight risk and do not create a compact-preservation blocker.
+- Metadata after merge preservation:
+  - `upstreamhash.txt`: `da4c8ca57d40b074bdc1b5b1218851100150c56b`
+  - `modversion.txt`: `1`
+- Conflict checks:
+  - `git diff --name-only --diff-filter=U`: no output.
+  - `git diff --check`: no output.
+- Maintenance commands run after merge:
+  - `just bazel-lock-update`: passed as dependency lock maintenance only, with non-fatal crate-annotation warnings.
+  - `cd codex-rs && just fmt`: passed.
+- Tests: not run unless explicitly requested.
+- Bazel: no Bazel build or test was run; Bazel was used only for dependency lock maintenance required by dependency changes.
+
 ## Build details
 - Build command: `CODEX_CLI_RELEASE_VERSION="${version}" cargo build -p codex-cli --release` from `codex-rs`.
 - Expected Linux CLI binary path: `codex-rs/target/release/codex`.
