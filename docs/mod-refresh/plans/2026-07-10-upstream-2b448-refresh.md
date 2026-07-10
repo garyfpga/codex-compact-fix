@@ -249,3 +249,19 @@ succeeds and a later step fails.
   `upstream/main`: remove obsolete turn-context arguments and pass the effective
   turn config's `HttpClientFactory` to the model ETag refresh.
 - Recovery formatting: `cd codex-rs && just fmt` completed successfully.
+- Second release build: FAILED with exit code 101 after the three approved fixes
+  compiled. `codex-core` reported an unhandled upstream
+  `ResponseEvent::ReasoningSummaryDone` variant in the exhaustive event match in
+  `core/src/session/turn.rs`; the compiler also reported unused parameters around
+  that stale merged event-processing path. No artifact was copied, tagged,
+  pushed, or published. Release flow stopped again for explicit recovery
+  direction.
+- Second recovery direction: user explicitly approved continuing.
+- Reasoning-event fix reviewer: PASS. The earlier whole-file `ours` resolution of
+  `session/turn.rs` had also dropped upstream request-scoped MCP tool snapshots,
+  streamed item-ID repair, hook lifecycle recording, and sequential-cutoff
+  reasoning summaries. The file was restored wholesale from `upstream/main`, then
+  only the fork's shared remote-compaction imports and `run_auto_compact` routing
+  were reapplied. Its remaining diff from upstream is confined to those intended
+  compact-routing changes.
+- Second recovery formatting: `cd codex-rs && just fmt` completed successfully.
