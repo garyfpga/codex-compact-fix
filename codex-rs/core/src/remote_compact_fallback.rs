@@ -54,6 +54,7 @@ impl RemoteCompactVersion {
 pub(crate) async fn run_remote_first_auto_compact(
     sess: &Arc<Session>,
     step_context: Arc<StepContext>,
+    fallback_step_context: Option<Arc<StepContext>>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
@@ -65,6 +66,7 @@ pub(crate) async fn run_remote_first_auto_compact(
         Arc::clone(sess),
         Arc::clone(&turn_context),
         step_context,
+        fallback_step_context,
         Some(client_session),
         RemoteCompactKind::Auto {
             initial_context_injection,
@@ -87,6 +89,7 @@ pub(crate) async fn run_remote_first_manual_compact(
         sess,
         turn_context,
         step_context,
+        /*fallback_step_context*/ None,
         None,
         RemoteCompactKind::Manual,
         version,
@@ -142,6 +145,7 @@ async fn run_remote_first_compact(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     step_context: Arc<StepContext>,
+    fallback_step_context: Option<Arc<StepContext>>,
     client_session: Option<&mut ModelClientSession>,
     kind: RemoteCompactKind,
     version: RemoteCompactVersion,
@@ -195,6 +199,7 @@ async fn run_remote_first_compact(
     match run_remote_attempt(
         &sess,
         &step_context,
+        fallback_step_context.as_ref(),
         client_session,
         kind.clone(),
         version,
@@ -272,6 +277,7 @@ async fn run_token_budget_compact(
 async fn run_remote_attempt(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
+    fallback_step_context: Option<&Arc<StepContext>>,
     client_session: Option<&mut ModelClientSession>,
     kind: RemoteCompactKind,
     version: RemoteCompactVersion,
@@ -289,6 +295,7 @@ async fn run_remote_attempt(
             compact_remote::run_remote_compact_task_for_mode(
                 sess,
                 step_context,
+                fallback_step_context,
                 turn_state,
                 initial_context_injection,
                 trigger,
@@ -308,6 +315,7 @@ async fn run_remote_attempt(
             compact_remote_v2::run_remote_compact_task_for_mode(
                 sess,
                 step_context,
+                fallback_step_context,
                 client_session,
                 initial_context_injection,
                 trigger,

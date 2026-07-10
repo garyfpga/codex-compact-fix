@@ -204,5 +204,29 @@ succeeds and a later step fails.
 
 - Fresh preflight: PASS; ready to continue.
 - Full-release preflight reviewer: PASS.
+- Full-release chain reviewer: PASS.
+- Release-plan reviewer: PASS; release-notes content approved for packaging review.
+- Plan and release-notes commit: `2f6bbf2633eb961498069556e2a4075390e3f997`.
+- Merge-start HEAD: `2f6bbf2633eb961498069556e2a4075390e3f997`.
+- Real merge target: `upstream/main` at
+  `2b44896c5ad653a1dcfc537f8bdc37767744ed09`; its conflict inventory exactly
+  matched the seven simulated paths.
+- Merge conflict worker: PASS; upstream request/attempt modules retained, with
+  one global visible attempt budget across previous-model and selected-model
+  requests and the fork timeout, retry, service-tier, and fallback policies.
+- Conflict resolution: upstream route-aware HTTP client and raw-auth logging
+  architecture retained; compact keepalive support was adapted to that client
+  factory. `/model` and `/modelp` persistence semantics were retained while
+  incorporating upstream Ultra reasoning concurrency warnings.
+- Metadata: `upstreamhash.txt` updated to
+  `2b44896c5ad653a1dcfc537f8bdc37767744ed09`; `modversion.txt` remains `1`.
+- Dependency lock maintenance: repository-root `just bazel-lock-update` completed
+  successfully. It invoked Bazel only to refresh `MODULE.bazel.lock`; no Bazel
+  build or test was run.
+- Formatting: `cd codex-rs && just fmt` completed successfully.
+- Compact-preservation reviewer: PASS; one global request budget, exact retry and
+  transport boundaries, selected-model fallback, clean local fallback, dynamic
+  tool snapshots, compact-only service tier, `/model`/`/modelp`, config/schema,
+  and metadata contracts were preserved by inspection.
 - Tests: not run unless explicitly requested.
 - Bazel: not used; using Cargo release build only.

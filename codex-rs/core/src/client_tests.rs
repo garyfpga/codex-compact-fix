@@ -21,6 +21,8 @@ use codex_api::ResponseEvent;
 use codex_api::RetryOn;
 use codex_api::RetryPolicy;
 use codex_api::TransportError;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
@@ -105,7 +107,9 @@ fn test_model_client_with_thread_id(
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     )
 }
 
@@ -149,7 +153,9 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     );
     let prompt = Prompt {
         input: vec![ResponseItem::Message {
@@ -834,9 +840,11 @@ fn model_client_with_counting_attestation(
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
         Some(Arc::new(CountingAttestationProvider {
             calls: attestation_calls.clone(),
         })),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     );
     (model_client, attestation_calls)
 }
