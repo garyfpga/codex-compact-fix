@@ -235,3 +235,17 @@ succeeds and a later step fails.
   `0.144.2b448.1.mod`.
 - Tests: not run unless explicitly requested.
 - Bazel: not used; using Cargo release build only.
+- First release build: FAILED with exit code 101. The exact versioned command was
+  `cd codex-rs && CODEX_CLI_RELEASE_VERSION="0.144.2b448.1.mod" cargo build -p codex-cli --release`.
+  `codex-core` reported three post-merge API mismatches in
+  `core/src/session/turn.rs`: obsolete `turn_context` arguments to
+  `finalize_non_tool_response_item` and `handle_non_tool_response_item`, and a
+  missing `HttpClientFactory` argument to `models_manager.refresh_if_new_etag`.
+  No artifact was copied, tagged, pushed, or published. Release flow stopped for
+  explicit recovery direction as required by the build-failure gate.
+- Recovery direction: user explicitly approved fixing the three compile errors
+  and resuming the release chain.
+- Build-failure fix reviewer: PASS. The three minimal call-site fixes match
+  `upstream/main`: remove obsolete turn-context arguments and pass the effective
+  turn config's `HttpClientFactory` to the model ETag refresh.
+- Recovery formatting: `cd codex-rs && just fmt` completed successfully.
