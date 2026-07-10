@@ -228,5 +228,10 @@ succeeds and a later step fails.
   transport boundaries, selected-model fallback, clean local fallback, dynamic
   tool snapshots, compact-only service tier, `/model`/`/modelp`, config/schema,
   and metadata contracts were preserved by inspection.
+- Merge commit: `6462e9f90974eca6301fcd43b68f2ddf4b510fe9`.
+- Pre-build version computation: latest stable upstream `0.144.1`; base series
+  `0.144`; upstream SHA `2b44896c5ad653a1dcfc537f8bdc37767744ed09`;
+  upstream short `2b448`; mod version `1`; release version
+  `0.144.2b448.1.mod`.
 - Tests: not run unless explicitly requested.
 - Bazel: not used; using Cargo release build only.
