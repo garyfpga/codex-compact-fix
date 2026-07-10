@@ -265,3 +265,17 @@ succeeds and a later step fails.
   were reapplied. Its remaining diff from upstream is confined to those intended
   compact-routing changes.
 - Second recovery formatting: `cd codex-rs && just fmt` completed successfully.
+- First successful release build source HEAD:
+  `293b5eee7d45f4e619959ec3eba4e5dbb563815a`.
+- First successful release build: `cd codex-rs &&
+  CODEX_CLI_RELEASE_VERSION="0.144.2b448.1.mod" cargo build -p codex-cli
+  --release` completed in 10m 34s. It emitted only upstream dead-code and
+  unused-mut warnings.
+- First successful build artifact: `codex-rs/target/release/codex` copied
+  atomically to repository-root `codex`; both are 1,329,387,928 bytes, executable,
+  and SHA-256
+  `b1b916283460cd9c7b590b3a57e909b78dfc2c2b4575a6ec4718169f26827313`.
+- First successful artifact version: `codex-cli 0.144.2b448.1.mod`.
+- First successful build verifier: PASS; artifact identity, executable mode,
+  size, hash, embedded version, metadata-derived version, formatting, command,
+  and skipped-test/Bazel policy all matched the release contract.
