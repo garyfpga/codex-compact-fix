@@ -748,7 +748,7 @@ impl ThreadManager {
             fork_source.multi_agent_version(),
             options.config.multi_agent_version_override,
         )
-        .unwrap_or(MultiAgentVersion::V1);
+        .unwrap_or_else(|| options.config.multi_agent_version_from_features());
         options.initial_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
@@ -1047,7 +1047,7 @@ impl ThreadManager {
                 config.multi_agent_version_override,
             )
             .await
-            .unwrap_or(MultiAgentVersion::V1);
+            .unwrap_or_else(|| config.multi_agent_version_from_features());
         let interrupted_marker =
             InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
@@ -1196,7 +1196,7 @@ impl ThreadManagerState {
             config.multi_agent_version_override,
         )
         .await
-        .unwrap_or(MultiAgentVersion::V1)
+        .unwrap_or_else(|| config.multi_agent_version_from_features())
     }
 
     async fn initial_multi_agent_version_for_spawn(
