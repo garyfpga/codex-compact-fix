@@ -159,5 +159,25 @@ tag/release operation partially succeeds and a later step fails.
 - Fresh preflight: PASS; ready to continue.
 - Release-plan reviewer: PASS; no missing gates, stale assumptions, artifact
   ambiguity, metadata/version-contract issue, or unsafe publish step found.
+- Plan and release-notes commit: `e11cf5edd55cd6a01bf7fc9c5fa3fbf119e5a9c5`.
+- Merge-start HEAD: `e11cf5edd55cd6a01bf7fc9c5fa3fbf119e5a9c5`.
+- Real merge: `upstream/main` at
+  `c888e8e75a9f0e90ce7d5517f8b9540832cbbf76` merged cleanly with no textual
+  conflicts as merge commit `7b118fde543233173f5d3328dfe798c39c1dfa91`.
+- Merge-conflict/overlap worker: PASS. The eight automatic overlaps were
+  semantically disjoint from the preserved compact, metadata-display, and
+  `/model` versus `/modelp` contracts; no code edit or unsurfaced behavior choice
+  was required.
+- Metadata: `upstreamhash.txt` updated to
+  `c888e8e75a9f0e90ce7d5517f8b9540832cbbf76`; `modversion.txt` remains `1`.
+- Dependency lock maintenance: repository-root `just bazel-lock-update`
+  completed successfully. It invoked Bazel only to refresh `MODULE.bazel.lock`;
+  no Bazel build or test ran.
+- Formatting: `cd codex-rs && just fmt` completed successfully.
+- Compact-preservation reviewer: PASS after clarifying that Bazel was invoked
+  only for dependency lock maintenance; all preserved compact, transport,
+  metadata-display, and model-selection contracts passed source inspection.
 - Tests: not run unless explicitly requested.
-- Bazel: not used; using Cargo release build only.
+- Release-build decision: Bazel: not used; using Cargo release build only.
+  Bazel build/tests were not run; Bazel was invoked only by
+  `just bazel-lock-update` for dependency lock maintenance.
