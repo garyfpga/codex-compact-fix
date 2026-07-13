@@ -721,6 +721,7 @@ impl Session {
             }
             TurnMultiAgentRuntime::Preview => self
                 .multi_agent_version()
+                .or(per_turn_config.multi_agent_version_override)
                 .or(model_info.multi_agent_version)
                 .unwrap_or_else(|| per_turn_config.multi_agent_version_from_features()),
         };

@@ -2073,16 +2073,159 @@ async fn prepares_resumed_history_before_installing_it() {
 }
 
 #[test]
-fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
+fn resolve_multi_agent_version_new_override_wins_over_v2_catalog_and_feature() {
+    assert_eq!(
+        resolve_multi_agent_version(
+            &InitialHistory::New,
+            /*inherited_multi_agent_version*/ None,
+            Some(MultiAgentVersion::V1),
+            Some(MultiAgentVersion::V2),
+            MultiAgentVersion::V2,
+        ),
+        MultiAgentVersion::V1
+    );
+}
+
+#[test]
+fn resolve_multi_agent_version_child_override_wins_over_inherited_v2() {
+    assert_eq!(
+        resolve_multi_agent_version(
+            &InitialHistory::New,
+            Some(MultiAgentVersion::V2),
+            Some(MultiAgentVersion::V1),
+            Some(MultiAgentVersion::V2),
+            MultiAgentVersion::V2,
+        ),
+        MultiAgentVersion::V1
+    );
+    assert_eq!(
+        resolve_multi_agent_version_from_history(
+            &InitialHistory::New,
+            Some(MultiAgentVersion::V2),
+            Some(MultiAgentVersion::V1),
+        ),
+        Some(MultiAgentVersion::V1)
+    );
+}
+
+#[test]
+fn resolve_multi_agent_version_uses_history_then_inherited_without_override() {
     let thread_id = ThreadId::default();
 
     assert_eq!(
         resolve_multi_agent_version(
-            &InitialHistory::New,
-            /*inherited_multi_agent_version*/ None
+            &InitialHistory::Forked(vec![session_meta_item(
+                thread_id,
+                Some(MultiAgentVersion::V1)
+            )]),
+            Some(MultiAgentVersion::V2),
+            /*config_override*/ None,
+            Some(MultiAgentVersion::V2),
+            MultiAgentVersion::V2,
         ),
-        None
+        MultiAgentVersion::V1
     );
+    assert_eq!(
+        resolve_multi_agent_version_from_history(
+            &InitialHistory::Forked(vec![session_meta_item(
+                thread_id,
+                Some(MultiAgentVersion::V1)
+            )]),
+            Some(MultiAgentVersion::V2),
+            /*config_override*/ None,
+        ),
+        Some(MultiAgentVersion::V1)
+    );
+    assert_eq!(
+        resolve_multi_agent_version(
+            &InitialHistory::New,
+            Some(MultiAgentVersion::V2),
+            /*config_override*/ None,
+            Some(MultiAgentVersion::V1),
+            MultiAgentVersion::V1,
+        ),
+        MultiAgentVersion::V2
+    );
+}
+
+#[test]
+fn resolve_multi_agent_version_uses_catalog_before_feature_fallback() {
+    assert_eq!(
+        resolve_multi_agent_version(
+            &InitialHistory::New,
+            /*inherited_multi_agent_version*/ None,
+            /*config_override*/ None,
+            Some(MultiAgentVersion::V2),
+            MultiAgentVersion::V1,
+        ),
+        MultiAgentVersion::V2
+    );
+}
+
+#[test]
+fn resolve_multi_agent_version_supports_disabled_override() {
+    assert_eq!(
+        resolve_multi_agent_version(
+            &InitialHistory::Cleared,
+            Some(MultiAgentVersion::V2),
+            Some(MultiAgentVersion::Disabled),
+            Some(MultiAgentVersion::V2),
+            MultiAgentVersion::V2,
+        ),
+        MultiAgentVersion::Disabled
+    );
+    assert_eq!(
+        resolve_multi_agent_version_from_history(
+            &InitialHistory::Cleared,
+            Some(MultiAgentVersion::V2),
+            Some(MultiAgentVersion::Disabled),
+        ),
+        Some(MultiAgentVersion::Disabled)
+    );
+}
+
+#[test]
+fn resolve_multi_agent_version_resumed_v2_ignores_v1_config_override() {
+    let thread_id = ThreadId::default();
+
+    assert_eq!(
+        resolve_multi_agent_version(
+            &InitialHistory::Resumed(ResumedHistory {
+                conversation_id: thread_id,
+                history: Arc::new(vec![session_meta_item(
+                    thread_id,
+                    Some(MultiAgentVersion::V2)
+                )]),
+                rollout_path: None,
+            }),
+            /*inherited_multi_agent_version*/ None,
+            Some(MultiAgentVersion::V1),
+            Some(MultiAgentVersion::V1),
+            MultiAgentVersion::V1,
+        ),
+        MultiAgentVersion::V2
+    );
+    assert_eq!(
+        resolve_multi_agent_version_from_history(
+            &InitialHistory::Resumed(ResumedHistory {
+                conversation_id: thread_id,
+                history: Arc::new(vec![session_meta_item(
+                    thread_id,
+                    Some(MultiAgentVersion::V2)
+                )]),
+                rollout_path: None,
+            }),
+            /*inherited_multi_agent_version*/ None,
+            Some(MultiAgentVersion::V1),
+        ),
+        Some(MultiAgentVersion::V2)
+    );
+}
+
+#[test]
+fn resolve_multi_agent_version_resumed_legacy_v1_without_metadata() {
+    let thread_id = ThreadId::default();
+
     assert_eq!(
         resolve_multi_agent_version(
             &InitialHistory::Resumed(ResumedHistory {
@@ -2091,50 +2234,31 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
                 rollout_path: None,
             }),
             /*inherited_multi_agent_version*/ None,
-        ),
-        Some(MultiAgentVersion::V1)
-    );
-    assert_eq!(
-        resolve_multi_agent_version(
-            &InitialHistory::Resumed(ResumedHistory {
-                conversation_id: thread_id,
-                history: Arc::new(Vec::new()),
-                rollout_path: None,
-            }),
             Some(MultiAgentVersion::V2),
-        ),
-        Some(MultiAgentVersion::V2)
-    );
-    assert_eq!(
-        resolve_multi_agent_version(
-            &InitialHistory::Resumed(ResumedHistory {
-                conversation_id: thread_id,
-                history: Arc::new(vec![session_meta_item(
-                    thread_id,
-                    Some(MultiAgentVersion::Disabled)
-                )]),
-                rollout_path: None,
-            }),
             Some(MultiAgentVersion::V2),
+            MultiAgentVersion::V2,
         ),
-        Some(MultiAgentVersion::Disabled)
+        MultiAgentVersion::V1
+    );
+}
+
+#[test]
+fn resolve_multi_agent_version_from_history_defers_new_construction_without_early_selection() {
+    assert_eq!(
+        resolve_multi_agent_version_from_history(
+            &InitialHistory::New,
+            /*inherited_multi_agent_version*/ None,
+            /*config_override*/ None,
+        ),
+        None
     );
     assert_eq!(
-        resolve_multi_agent_version(
-            &InitialHistory::Forked(vec![session_meta_item(
-                thread_id,
-                Some(MultiAgentVersion::V2)
-            )]),
-            Some(MultiAgentVersion::Disabled),
-        ),
-        Some(MultiAgentVersion::Disabled)
-    );
-    assert_eq!(
-        resolve_multi_agent_version(
+        resolve_multi_agent_version_from_history(
             &InitialHistory::Forked(Vec::new()),
-            /*inherited_multi_agent_version*/ None
+            /*inherited_multi_agent_version*/ None,
+            /*config_override*/ None,
         ),
-        Some(MultiAgentVersion::V1)
+        None
     );
 }
 

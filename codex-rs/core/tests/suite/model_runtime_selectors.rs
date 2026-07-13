@@ -19,6 +19,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
@@ -30,6 +31,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
@@ -37,6 +39,7 @@ use tokio::time::sleep;
 const CHILD_MODEL: &str = "test-multi-agent-child";
 const ROOT_MODEL: &str = "test-multi-agent-root";
 const ROOT_PROMPT: &str = "spawn a child";
+const SPAWN_CALL_ID: &str = "spawn-call-1";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 const UNSUPPORTED_CODE_MODE_WARNING: &str = "does not advertise Code Mode support";
 
@@ -122,7 +125,9 @@ async fn response_for_remote_model(
     let models_manager = test.thread_manager.get_models_manager();
     let available_model = wait_for_model_available(&models_manager, &model_slug).await;
     assert_eq!(available_model.model, model_slug);
-    assert_eq!(models_mock.requests().len(), 1);
+    if test.config.model_catalog.is_none() {
+        assert_eq!(models_mock.requests().len(), 1);
+    }
 
     submit_thread_settings(
         &test.codex,
@@ -326,7 +331,12 @@ async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
 
     let mut v2_model = remote_model("test-multi-agent-v2");
     v2_model.multi_agent_version = Some(MultiAgentVersion::V2);
-    let v2_body = response_body_for_remote_model(v2_model, |config| {
+    let v2_catalog_model = v2_model.clone();
+    let v2_body = response_body_for_remote_model(v2_model, move |config| {
+        config.model = Some("test-multi-agent-v2".to_string());
+        config.model_catalog = Some(ModelsResponse {
+            models: vec![v2_catalog_model],
+        });
         config.agent_max_threads = Some(3);
         config
             .features
@@ -342,7 +352,12 @@ async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
 
     let mut disabled_model = remote_model("test-multi-agent-disabled");
     disabled_model.multi_agent_version = Some(MultiAgentVersion::Disabled);
-    let disabled_body = response_body_for_remote_model(disabled_model, |config| {
+    let disabled_catalog_model = disabled_model.clone();
+    let disabled_body = response_body_for_remote_model(disabled_model, move |config| {
+        config.model = Some("test-multi-agent-disabled".to_string());
+        config.model_catalog = Some(ModelsResponse {
+            models: vec![disabled_catalog_model],
+        });
         config
             .features
             .enable(Feature::MultiAgentV2)
@@ -364,7 +379,7 @@ async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> Result<()> {
+async fn remote_multi_agent_selector_uses_initial_model_during_construction() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = wiremock::MockServer::start().await;
@@ -400,7 +415,7 @@ async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> 
             models_mock.requests().len(),
             test.codex.multi_agent_version(),
         ),
-        (1, None)
+        (1, Some(MultiAgentVersion::V1))
     );
 
     submit_thread_settings(
@@ -411,7 +426,10 @@ async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> 
         },
     )
     .await?;
-    assert_eq!(test.codex.multi_agent_version(), None);
+    assert_eq!(
+        test.codex.multi_agent_version(),
+        Some(MultiAgentVersion::V1)
+    );
 
     test.codex
         .submit(Op::UserInput {
@@ -440,9 +458,135 @@ async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> 
                     .expect("expected response request")
                     .body_json(),
             )
-            .contains(&MULTI_AGENT_V2_NAMESPACE.to_string()),
+            .contains(&"multi_agent_v1".to_string()),
         ),
-        (1, Some(MultiAgentVersion::V2), true)
+        (1, Some(MultiAgentVersion::V1), true)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_multi_agent_override_forces_v1_for_root_and_child() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut sol_like_model = remote_model("test-sol-like-v2-override");
+    sol_like_model.multi_agent_version = Some(MultiAgentVersion::V2);
+    let model_slug = sol_like_model.slug.clone();
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![sol_like_model],
+        },
+    )
+    .await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": "child: say done",
+    }))?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-parent-1"),
+                ev_function_call_with_namespace(
+                    SPAWN_CALL_ID,
+                    "multi_agent_v1",
+                    "spawn_agent",
+                    &spawn_args,
+                ),
+                ev_completed("resp-parent-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-child-1"),
+                ev_assistant_message("msg-child-1", "child done"),
+                ev_completed("resp-child-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-2"),
+                ev_assistant_message("msg-parent-2", "parent done"),
+                ev_completed("resp-parent-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.agent_max_threads = Some(3);
+            config.model = Some("test-sol-like-v2-override".to_string());
+            config.multi_agent_version_override = Some(MultiAgentVersion::V1);
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .disable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+    let models_manager = test.thread_manager.get_models_manager();
+    let available_model = wait_for_model_available(&models_manager, &model_slug).await;
+    assert_eq!(available_model.model, model_slug);
+    assert_eq!(models_mock.requests().len(), 1);
+    let catalog_model_info = models_manager
+        .get_model_info(&model_slug, &test.config.to_models_manager_config())
+        .await;
+    assert_eq!(
+        catalog_model_info.multi_agent_version,
+        Some(MultiAgentVersion::V2)
+    );
+    assert_eq!(
+        test.codex.multi_agent_version(),
+        Some(MultiAgentVersion::V1)
+    );
+
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            model: Some(model_slug),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    test.submit_turn(ROOT_PROMPT).await?;
+    let child_thread_id = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(thread_id) = test
+                .thread_manager
+                .list_thread_ids()
+                .await
+                .into_iter()
+                .find(|thread_id| *thread_id != test.session_configured.thread_id)
+            {
+                break thread_id;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for the subagent thread");
+    let child_thread = test.thread_manager.get_thread(child_thread_id).await?;
+    wait_for_event(child_thread.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let parent_body = responses
+        .requests()
+        .first()
+        .expect("expected parent response request")
+        .body_json();
+    let parent_tools = tool_names(&parent_body);
+    assert!(parent_tools.contains(&"multi_agent_v1".to_string()));
+    assert!(!parent_tools.contains(&MULTI_AGENT_V2_NAMESPACE.to_string()));
+    assert_eq!(
+        child_thread.multi_agent_version(),
+        Some(MultiAgentVersion::V1)
     );
 
     Ok(())

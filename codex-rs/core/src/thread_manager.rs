@@ -13,7 +13,7 @@ use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
-use crate::session::resolve_multi_agent_version;
+use crate::session::resolve_multi_agent_version_from_history;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
@@ -742,15 +742,19 @@ impl ThreadManager {
                 ))
             })?;
         let history = stored_thread_to_initial_history(stored_thread, fork_source.rollout_path())?;
-        let inherited_multi_agent_version = fork_source
-            .multi_agent_version()
-            .unwrap_or(MultiAgentVersion::V1);
+        let history_for_version = forked_history_for_version_resolution(&history);
+        let multi_agent_version = resolve_multi_agent_version_from_history(
+            &history_for_version,
+            fork_source.multi_agent_version(),
+            options.config.multi_agent_version_override,
+        )
+        .unwrap_or(MultiAgentVersion::V1);
         options.initial_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
             InterruptedTurnHistoryMarker::from_config_and_version(
                 &options.config,
-                inherited_multi_agent_version,
+                multi_agent_version,
             ),
         );
         self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
@@ -1032,16 +1036,18 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
+        let history_for_version = forked_history_for_version_resolution(&history);
         let multi_agent_version = self
             .state
-            .effective_multi_agent_version_for_spawn(
-                &history,
+            .initial_multi_agent_version_for_spawn(
+                &history_for_version,
                 /*session_source*/ None,
                 /*parent_thread_id*/ None,
                 source_thread_id,
-                &config,
+                config.multi_agent_version_override,
             )
-            .await;
+            .await
+            .unwrap_or(MultiAgentVersion::V1);
         let interrupted_marker =
             InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
@@ -1187,9 +1193,10 @@ impl ThreadManagerState {
             session_source,
             parent_thread_id,
             forked_from_thread_id,
+            config.multi_agent_version_override,
         )
         .await
-        .unwrap_or_else(|| config.multi_agent_version_from_features())
+        .unwrap_or(MultiAgentVersion::V1)
     }
 
     async fn initial_multi_agent_version_for_spawn(
@@ -1198,6 +1205,7 @@ impl ThreadManagerState {
         session_source: Option<&SessionSource>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
+        config_override: Option<MultiAgentVersion>,
     ) -> Option<MultiAgentVersion> {
         let inherited_thread_id = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -1217,7 +1225,11 @@ impl ThreadManagerState {
                 .and_then(|thread| thread.multi_agent_version()),
             None => None,
         };
-        resolve_multi_agent_version(initial_history, inherited_multi_agent_version)
+        resolve_multi_agent_version_from_history(
+            initial_history,
+            inherited_multi_agent_version,
+            config_override,
+        )
     }
 
     /// Resolves the provider snapshot for a newly spawned runtime.
@@ -1573,6 +1585,7 @@ impl ThreadManagerState {
                 Some(&session_source),
                 parent_thread_id,
                 forked_from_thread_id,
+                config.multi_agent_version_override,
             )
             .await;
         let originator = self
@@ -1876,6 +1889,15 @@ fn fork_history_from_snapshot(
             } else {
                 history
             }
+        }
+    }
+}
+
+fn forked_history_for_version_resolution(history: &InitialHistory) -> InitialHistory {
+    match history {
+        InitialHistory::New | InitialHistory::Cleared => history.clone(),
+        InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
+            InitialHistory::Forked(history.get_rollout_items().to_vec())
         }
     }
 }

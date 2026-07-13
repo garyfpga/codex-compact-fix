@@ -10310,6 +10310,21 @@ async fn load_config_for_remote_compact_test(config_toml: Option<&str>) -> std::
         .await
 }
 
+async fn load_config_for_multi_agent_version_override_test(
+    config_toml: Option<&str>,
+) -> std::io::Result<Config> {
+    let codex_home = TempDir::new()?;
+    if let Some(config_toml) = config_toml {
+        std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), config_toml)?;
+    }
+
+    ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+}
+
 async fn assert_remote_compact_config_error(
     config_toml: &str,
     expected_message: &str,
@@ -10449,6 +10464,47 @@ tcp_keepalive_interval_ms = 60001
     ] {
         assert_remote_compact_config_error(config_toml, expected_message).await?;
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_version_override_loads_from_top_level_config() -> std::io::Result<()> {
+    for (config_toml, expected_override) in [
+        (
+            Some(r#"multi_agent_version_override = "disabled""#),
+            Some(MultiAgentVersion::Disabled),
+        ),
+        (
+            Some(r#"multi_agent_version_override = "v1""#),
+            Some(MultiAgentVersion::V1),
+        ),
+        (
+            Some(r#"multi_agent_version_override = "v2""#),
+            Some(MultiAgentVersion::V2),
+        ),
+        (None, None),
+    ] {
+        let config = load_config_for_multi_agent_version_override_test(config_toml).await?;
+        assert_eq!(config.multi_agent_version_override, expected_override);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_version_override_rejects_invalid_value() -> std::io::Result<()> {
+    let err = load_config_for_multi_agent_version_override_test(Some(
+        r#"multi_agent_version_override = "v3""#,
+    ))
+    .await
+    .expect_err("invalid multi_agent_version_override should fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string()
+            .contains("unknown variant `v3`, expected one of `disabled`, `v1`, `v2`")
+    );
 
     Ok(())
 }

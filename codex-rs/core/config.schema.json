@@ -1782,6 +1782,14 @@
       },
       "type": "object"
     },
+    "MultiAgentVersion": {
+      "enum": [
+        "disabled",
+        "v1",
+        "v2"
+      ],
+      "type": "string"
+    },
     "NetworkDomainPermissionToml": {
       "enum": [
         "allow",
@@ -5331,6 +5339,14 @@
         }
       ],
       "description": "Optional verbosity control for GPT-5 models (Responses API `text.verbosity`)."
+    },
+    "multi_agent_version_override": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/MultiAgentVersion"
+        }
+      ],
+      "description": "Optional override for the multi-agent version used by newly created roots, forks, and children.\n\nThis override is checked before copied history, inherited parent version, model catalog metadata, and feature fallback.\n\nResumed existing sessions keep their persisted version for compatibility, even when this override is set."
     },
     "notice": {
       "allOf": [

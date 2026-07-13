@@ -451,19 +451,43 @@ pub(crate) struct CodexSpawnArgs {
 pub(crate) fn resolve_multi_agent_version(
     conversation_history: &InitialHistory,
     inherited_multi_agent_version: Option<MultiAgentVersion>,
-) -> Option<MultiAgentVersion> {
-    if inherited_multi_agent_version == Some(MultiAgentVersion::Disabled) {
-        return Some(MultiAgentVersion::Disabled);
+    config_override: Option<MultiAgentVersion>,
+    model_multi_agent_version: Option<MultiAgentVersion>,
+    feature_fallback: MultiAgentVersion,
+) -> MultiAgentVersion {
+    if let InitialHistory::Resumed(_) = conversation_history {
+        return conversation_history
+            .get_multi_agent_version()
+            .or(inherited_multi_agent_version)
+            // Threads created before runtime metadata existed keep the legacy V1 tool surface.
+            .unwrap_or(MultiAgentVersion::V1);
     }
 
-    conversation_history
-        .get_multi_agent_version()
+    config_override
+        .or_else(|| conversation_history.get_multi_agent_version())
         .or(inherited_multi_agent_version)
-        .or(match conversation_history {
-            InitialHistory::New | InitialHistory::Cleared => None,
-            // Threads created before runtime metadata existed keep the legacy V1 tool surface.
-            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => Some(MultiAgentVersion::V1),
-        })
+        .or(model_multi_agent_version)
+        .unwrap_or(feature_fallback)
+}
+
+pub(crate) fn resolve_multi_agent_version_from_history(
+    conversation_history: &InitialHistory,
+    inherited_multi_agent_version: Option<MultiAgentVersion>,
+    config_override: Option<MultiAgentVersion>,
+) -> Option<MultiAgentVersion> {
+    if let InitialHistory::Resumed(_) = conversation_history {
+        return Some(
+            conversation_history
+                .get_multi_agent_version()
+                .or(inherited_multi_agent_version)
+                // Threads created before runtime metadata existed keep the legacy V1 tool surface.
+                .unwrap_or(MultiAgentVersion::V1),
+        );
+    }
+
+    config_override
+        .or_else(|| conversation_history.get_multi_agent_version())
+        .or(inherited_multi_agent_version)
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -604,8 +628,13 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let multi_agent_version =
-            resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
+        let multi_agent_version = resolve_multi_agent_version(
+            &conversation_history,
+            inherited_multi_agent_version,
+            config.multi_agent_version_override,
+            model_info.multi_agent_version,
+            config.multi_agent_version_from_features(),
+        );
         let history_mode = conversation_history.get_history_mode(
             requested_history_mode.unwrap_or_else(|| thread_store.default_history_mode()),
         );
@@ -707,7 +736,7 @@ impl Codex {
             parent_rollout_thread_trace,
             attestation_provider,
             external_time_provider,
-            multi_agent_version,
+            Some(multi_agent_version),
         ))
         .await
         .map_err(|e| {
@@ -3105,8 +3134,9 @@ impl Session {
             return multi_agent_version;
         }
 
-        let selected = model_info
-            .multi_agent_version
+        let selected = config
+            .multi_agent_version_override
+            .or(model_info.multi_agent_version)
             .unwrap_or_else(|| config.multi_agent_version_from_features());
 
         self.set_multi_agent_version_if_unset(selected)

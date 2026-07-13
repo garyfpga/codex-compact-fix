@@ -640,6 +640,10 @@ pub struct Config {
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
 
+    /// Optional override for the multi-agent version used by newly created
+    /// roots, forks, and children.
+    pub multi_agent_version_override: Option<MultiAgentVersion>,
+
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
 
@@ -3899,6 +3903,7 @@ impl Config {
             model,
             service_tier,
             review_model,
+            multi_agent_version_override: cfg.multi_agent_version_override,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_auto_compact_token_limit_scope: cfg

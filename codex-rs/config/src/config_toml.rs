@@ -50,6 +50,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
 use schemars::JsonSchema;
@@ -157,6 +158,15 @@ pub struct ConfigToml {
     pub model: Option<String>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
+    /// Optional override for the multi-agent version used by newly created
+    /// roots, forks, and children.
+    ///
+    /// This override is checked before copied history, inherited parent
+    /// version, model catalog metadata, and feature fallback.
+    ///
+    /// Resumed existing sessions keep their persisted version for
+    /// compatibility, even when this override is set.
+    pub multi_agent_version_override: Option<MultiAgentVersion>,
 
     /// Provider to use from the model_providers map.
     pub model_provider: Option<String>,
