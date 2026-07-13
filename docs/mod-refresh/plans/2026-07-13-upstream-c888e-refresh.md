@@ -177,6 +177,15 @@ tag/release operation partially succeeds and a later step fails.
 - Compact-preservation reviewer: PASS after clarifying that Bazel was invoked
   only for dependency lock maintenance; all preserved compact, transport,
   metadata-display, and model-selection contracts passed source inspection.
+- Merge-preservation record commit:
+  `13c2a9f55fb684c67c64a3cf28484416755f9fa1`.
+- Pre-build version computation: latest stable upstream `0.144.1`; base series
+  `0.144`; upstream SHA `c888e8e75a9f0e90ce7d5517f8b9540832cbbf76`;
+  upstream short `c888e`; mod version `1`; release version
+  `0.144.c888e.1.mod`.
+- Build command: `cd codex-rs &&
+  CODEX_CLI_RELEASE_VERSION="0.144.c888e.1.mod" cargo build -p codex-cli
+  --release`.
 - Tests: not run unless explicitly requested.
 - Release-build decision: Bazel: not used; using Cargo release build only.
   Bazel build/tests were not run; Bazel was invoked only by
