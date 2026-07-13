@@ -186,6 +186,17 @@ tag/release operation partially succeeds and a later step fails.
 - Build command: `cd codex-rs &&
   CODEX_CLI_RELEASE_VERSION="0.144.c888e.1.mod" cargo build -p codex-cli
   --release`.
+- First successful release build source HEAD:
+  `fbd5e867c91378ae97de23811b656a12e48251e7`.
+- First release build: completed successfully in 10m 21s with only upstream
+  unused/dead-code warnings.
+- First build artifact: `codex-rs/target/release/codex` copied to repository-root
+  `codex`; both are executable, 1,334,692,632 bytes, and SHA-256
+  `634702aed52974eabff7c7f8b3b4ae8459d3532a21a9d98674accd81c7739c15`.
+- First artifact version: `codex-cli 0.144.c888e.1.mod`.
+- First build verifier: PASS; version derivation, formatting, Cargo command,
+  skipped tests/Bazel build/tests, artifact identity, executable mode, size,
+  hash, and exact version output all matched the release contract.
 - Tests: not run unless explicitly requested.
 - Release-build decision: Bazel: not used; using Cargo release build only.
   Bazel build/tests were not run; Bazel was invoked only by
