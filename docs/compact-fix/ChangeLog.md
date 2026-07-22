@@ -1,14 +1,14 @@
 # Compact Fix ChangeLog
 
 ## Purpose
-This document is the durable behavior map for the fork-local compact changes that sit on top of upstream merge-base `f42780109c`. It records the intentional delta that was present at planning-time head `b722574da3` and gives future agents a stable starting point for upstream merges, conflict resolution, and release preparation.
+This document is the durable behavior map for fork-local changes that must survive upstream merges. It preserves the compact delta present at planning-time head `b722574da3` and selected later fork-local additions that need the same protection during conflict resolution and release preparation.
 
-Start here before reading implementation code. The goal is to preserve the fork's compact behavior, not to rediscover it from a moving `upstream/main` pointer.
+Start here before reading implementation code. The goal is to preserve the fork's intentional behavior, not to rediscover it from a moving `upstream/main` pointer.
 
 ## Baseline
 The baseline inventory is the fork delta from `f42780109c` to `b722574da3`, using `git diff --name-status f42780109c..b722574da3` as requested by the plan. Do not substitute the moving `upstream/main` ref for this inventory.
 
-The inventory below intentionally excludes `docs/compact-fix/ChangeLog.md` and `docs/simplepower/plans/2026-06-18-compact-fix-changelog.md`; those belong to this documentation run, not the upstream compact-fix delta.
+The frozen inventory below intentionally excludes `docs/compact-fix/ChangeLog.md` and `docs/simplepower/plans/2026-06-18-compact-fix-changelog.md`; those belong to this documentation run, not the upstream compact-fix delta. Later preservation additions are documented separately and do not extend this historical inventory.
 
 ## Preservation Checklist
 - Keep `remote_compact` config parsing, validation, defaults, and schema generation aligned.
@@ -20,6 +20,7 @@ The inventory below intentionally excludes `docs/compact-fix/ChangeLog.md` and `
 - Keep the compact integration tests and snapshots current whenever request shape or fallback text changes.
 - Keep the TUI version label display-only and aligned with `CODEX_CLI_RELEASE_VERSION`, preserving binary/TUI `.mod` version consistency with Cargo package fallback for local builds.
 - Keep `/model` session-only and `/modelp` persistent, including nested model, reasoning, and Plan-mode picker paths.
+- Keep the global multi-agent version override (`disabled`, `v1`, or `v2`) authoritative for newly created roots, forks, and children, while resumed sessions retain their persisted version.
 - Keep the Simple Power plan trail intact so future merge agents can read the rationale before changing code.
 
 ## Behavior Changes
@@ -272,6 +273,9 @@ Future merge agents need the human-approved intent, not just the code, when deci
 - Read these plans before resolving any later upstream merge that touches compact or the TUI version label.
 - Update this section if the preserved behavior set changes in a new approved plan.
 
+## Post-baseline Preservation Additions
+These intentional fork-local additions landed after `b722574da3`. They are excluded from the frozen baseline inventory; the files and anchors in each entry are the maintenance map for future merges.
+
 ### 11. Session-only `/model` and persistent `/modelp`
 **Files**
 - `codex-rs/tui/src/app_event.rs`
@@ -310,7 +314,44 @@ The fork wants fast session-local model switching without mutating `config.toml`
 - Keep service-tier pseudo-commands inserted immediately after `/model`; `/modelp` follows those pseudo-commands when they are enabled.
 - Keep tests and snapshots current for temporary selection, persistent selection, Plan-mode scope behavior, slash-command availability, command popup filtering, and `/modelp` visibility.
 
-## Changed File Inventory
+### 12. Global multi-agent version override
+**Files**
+- `codex-rs/config/src/config_toml.rs`
+- `codex-rs/core/src/config/mod.rs`
+- `codex-rs/core/config.schema.json`
+- `codex-rs/core/src/session/mod.rs`
+- `codex-rs/core/src/session/turn_context.rs`
+- `codex-rs/core/src/thread_manager.rs`
+- `codex-rs/core/src/config/config_tests.rs`
+- `codex-rs/core/src/session/tests.rs`
+- `codex-rs/core/tests/suite/model_runtime_selectors.rs`
+- `docs/simplepower/plans/2026-07-13-multi-agent-version-override.md`
+
+**Current anchors**
+- `codex-rs/config/src/config_toml.rs:156-169`
+- `codex-rs/core/src/config/mod.rs:643-645, 3902-3907`
+- `codex-rs/core/config.schema.json:5343-5350`
+- `codex-rs/core/src/session/mod.rs:451-490, 3128-3142`
+- `codex-rs/core/src/session/turn_context.rs:718-726`
+- `codex-rs/core/src/thread_manager.rs:745-751, 1039-1050, 1191-1232, 1582-1590`
+- `codex-rs/core/src/config/config_tests.rs:10472-10510`
+- `codex-rs/core/src/session/tests.rs:2187-2242`
+- `codex-rs/core/tests/suite/model_runtime_selectors.rs:470-545`
+- `docs/simplepower/plans/2026-07-13-multi-agent-version-override.md:5-9, 24-92`
+
+**What changed**
+`multi_agent_version_override` is a global top-level TOML setting that accepts `disabled`, `v1`, and `v2`. For new, cleared, and forked sessions, the explicit override wins over copied history, an inherited parent version, model-catalog metadata, and feature fallback. This makes `multi_agent_version_override = "v1"` force the V1 tool surface and persisted version for both a fresh root and its children even when the model catalog advertises V2. Resumed sessions deliberately retain their persisted version (or legacy V1 when metadata is absent), ignoring a current override.
+
+**Why**
+The fork needs a stable escape hatch when catalog metadata or feature defaults select an incompatible multi-agent surface. Applying the same early rule to spawn, capacity/residency, and fork-marker bookkeeping prevents those paths from disagreeing with the session's eventual version while preserving feature fallback where no early selection exists.
+
+**Future merge notes**
+- Preserve all three accepted values and the global-only config shape; do not replace the explicit override with a catalog or feature-only decision.
+- Keep the non-resumed precedence order: override, copied history, inherited parent, catalog metadata, then feature fallback. A resumed rollout must continue to ignore the current override and retain persisted compatibility.
+- Keep session model resolution, preview, root creation, child spawning, and fork bookkeeping aligned. In early bookkeeping paths with no selection, use the configured feature fallback rather than hard-coding V1.
+- Preserve the focused config, session, and root-and-child V1 integration coverage when changing these paths.
+
+## Baseline Changed File Inventory
 ```text
 M	codex-rs/codex-api/src/endpoint/compact.rs
 M	codex-rs/codex-api/src/endpoint/session.rs
@@ -337,38 +378,25 @@ M	codex-rs/core/tests/suite/snapshots/all__suite__compact_remote__remote_pre_tur
 M	codex-rs/login/src/auth/default_client.rs
 M	codex-rs/login/src/auth/default_client_tests.rs
 M	codex-rs/tui/src/bottom_pane/status_surface_preview.rs
-M	codex-rs/tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__chat_composer__tests__slash_popup_mo.snap
-M	codex-rs/tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__command_popup__tests__command_popup_default_items.snap
-M	codex-rs/tui/src/app/event_dispatch.rs
-M	codex-rs/tui/src/app_event.rs
-M	codex-rs/tui/src/bottom_pane/command_popup.rs
-M	codex-rs/tui/src/bottom_pane/slash_commands.rs
 A	codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__status_surface_previews_codex_version.snap
-M	codex-rs/tui/src/chatwidget/model_popups.rs
-M	codex-rs/tui/src/chatwidget/slash_dispatch.rs
 M	codex-rs/tui/src/chatwidget/status_surfaces.rs
-M	codex-rs/tui/src/chatwidget/tests/plan_mode.rs
-M	codex-rs/tui/src/chatwidget/tests/popups_and_settings.rs
-M	codex-rs/tui/src/chatwidget/tests/slash_commands.rs
 M	codex-rs/tui/src/chatwidget/tests/status_surface_previews.rs
-M	codex-rs/tui/src/slash_command.rs
 M	codex-rs/tui/src/version.rs
-M	codex-rs/tui/tooltips.txt
 A	docs/simplepower/plans/2026-06-08-compact-fast-service-tier-override.md
 A	docs/simplepower/plans/2026-06-08-remote-compact-timeout-fallback.md
 A	docs/simplepower/plans/2026-06-08-v1-remote-compact-config.md
 A	docs/simplepower/plans/2026-06-09-v2-remote-compact-policy.md
 A	docs/simplepower/plans/2026-06-11-upstream-main-compact-preserve-gary-version.md
-A	docs/simplepower/plans/2026-06-22-modelp-persistent-model-command.md
 ```
 
 ## Future Upstream Merge Procedure
-1. Re-read this changelog before touching any compact or TUI version files.
-2. Re-run the baseline inventory command `git diff --name-status f42780109c..b722574da3` and compare it to the inventory section above.
-3. Resolve overlaps in this order: config/schema, shared fallback routing, V1 runtime plumbing, V2 parity, tests/snapshots, TUI display label.
+1. Re-read this changelog before touching compact, TUI model-selection, or multi-agent session/thread code.
+2. Re-run the frozen baseline inventory command `git diff --name-status f42780109c..b722574da3` and compare it to the baseline inventory section above; use the post-baseline entries separately rather than broadening that historical diff.
+3. Resolve overlaps in this order: config/schema, shared fallback routing, V1 runtime plumbing, V2 parity, tests/snapshots, TUI display label, then post-baseline model-selection and multi-agent resolution.
 4. Preserve the compact-only fast-tier override and the binary/TUI `.mod` version consistency unless a new approved plan explicitly changes them.
 5. If a merge changes any `ConfigToml` or `remote_compact` shape, regenerate the schema before claiming the merge is done.
 6. If a merge changes request shape or warning text, update the compact tests and snapshots in the same change.
 7. If a merge touches the TUI version label or release metadata path, update the display snapshot and keep binary/TUI `.mod` version consistency.
 8. If a merge touches model picker, slash command, or TUI config-persistence paths, verify `/model` remains session-only and `/modelp` remains the persistent default-saving command.
-9. After the merge is stable, update this changelog so the next agent starts from the current fork delta instead of a stale summary.
+9. If a merge touches multi-agent config, session initialization, model resolution, spawning, or forks, preserve the override precedence and resumed-session compatibility, then run the focused config, session, and root-and-child V1 tests.
+10. After the merge is stable, update this changelog so the next agent starts from the current fork delta instead of a stale summary.
