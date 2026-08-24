@@ -3659,6 +3659,153 @@ async fn default_permissions_can_select_builtin_full_access_profile() -> std::io
 }
 
 #[tokio::test]
+async fn dangerously_trust_all_projects_permission_defaults_and_precedence() -> std::io::Result<()>
+{
+    struct Case {
+        name: &'static str,
+        config: ConfigToml,
+        overrides: ConfigOverrides,
+        expected: (AskForApproval, SandboxPolicy),
+    }
+
+    let cases = [
+        Case {
+            name: "omitted",
+            config: ConfigToml::default(),
+            overrides: ConfigOverrides::default(),
+            expected: (
+                AskForApproval::OnRequest,
+                SandboxPolicy::new_read_only_policy(),
+            ),
+        },
+        Case {
+            name: "false",
+            config: ConfigToml {
+                dangerously_trust_all_projects: Some(false),
+                ..Default::default()
+            },
+            overrides: ConfigOverrides::default(),
+            expected: (
+                AskForApproval::OnRequest,
+                SandboxPolicy::new_read_only_policy(),
+            ),
+        },
+        Case {
+            name: "true",
+            config: ConfigToml {
+                dangerously_trust_all_projects: Some(true),
+                ..Default::default()
+            },
+            overrides: ConfigOverrides::default(),
+            expected: (AskForApproval::Never, SandboxPolicy::DangerFullAccess),
+        },
+        Case {
+            name: "explicit approval",
+            config: ConfigToml {
+                dangerously_trust_all_projects: Some(true),
+                approval_policy: Some(AskForApproval::OnRequest),
+                ..Default::default()
+            },
+            overrides: ConfigOverrides::default(),
+            expected: (AskForApproval::OnRequest, SandboxPolicy::DangerFullAccess),
+        },
+        Case {
+            name: "explicit sandbox",
+            config: ConfigToml {
+                dangerously_trust_all_projects: Some(true),
+                sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+                ..Default::default()
+            },
+            overrides: ConfigOverrides::default(),
+            expected: (
+                AskForApproval::OnRequest,
+                SandboxPolicy::new_workspace_write_policy(),
+            ),
+        },
+        Case {
+            name: "explicit default permissions",
+            config: ConfigToml {
+                dangerously_trust_all_projects: Some(true),
+                default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
+                ..Default::default()
+            },
+            overrides: ConfigOverrides::default(),
+            expected: (
+                AskForApproval::OnRequest,
+                SandboxPolicy::new_read_only_policy(),
+            ),
+        },
+        Case {
+            name: "direct permission override",
+            config: ConfigToml {
+                dangerously_trust_all_projects: Some(true),
+                ..Default::default()
+            },
+            overrides: ConfigOverrides {
+                permission_profile: Some(PermissionProfile::read_only()),
+                ..Default::default()
+            },
+            expected: (
+                AskForApproval::OnRequest,
+                SandboxPolicy::new_read_only_policy(),
+            ),
+        },
+    ];
+
+    for case in cases {
+        let codex_home = TempDir::new()?;
+        let cwd = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            case.config,
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..case.overrides
+            },
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert_eq!(
+            (
+                config.permissions.approval_policy.value(),
+                config.legacy_sandbox_policy(),
+            ),
+            case.expected,
+            "unexpected permissions for {}",
+            case.name,
+        );
+    }
+
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "dangerously_trust_all_projects = true\n",
+    )?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_sandbox_modes = ["read-only"]"#,
+            ),
+        )
+        .build()
+        .await?;
+    assert_eq!(
+        (
+            config.permissions.approval_policy.value(),
+            config.legacy_sandbox_policy(),
+        ),
+        (
+            AskForApproval::OnRequest,
+            SandboxPolicy::new_read_only_policy(),
+        )
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn legacy_danger_no_sandbox_is_rejected() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;

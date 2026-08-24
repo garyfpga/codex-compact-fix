@@ -1,0 +1,4 @@
+interface:
+  display_name: "Minimal Fork Full Release"
+  short_description: "Refresh, build, and publish the minimal fork"
+  default_prompt: "Use $mod-refresh-full-release to merge current upstream changes into the minimal fork, build its optimized Linux CLI, and publish the commit-derived release."

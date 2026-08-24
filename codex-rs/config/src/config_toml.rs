@@ -212,6 +212,10 @@ pub struct ConfigToml {
     /// table.
     pub default_permissions: Option<String>,
 
+    /// Dangerous: treats unknown projects as trusted and defaults to full
+    /// access when no explicit permission configuration is set.
+    pub dangerously_trust_all_projects: Option<bool>,
+
     /// Named permissions profiles.
     #[serde(default)]
     pub permissions: Option<PermissionsToml>,

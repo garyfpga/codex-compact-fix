@@ -3687,6 +3687,121 @@ profile = "ignored"
 }
 
 #[tokio::test]
+async fn unknown_project_layer_enabled_when_trust_all() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    let dot_codex = nested.join(".codex");
+    tokio::fs::create_dir_all(&dot_codex).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        dot_codex.join(CONFIG_TOML_FILE),
+        r#"foo = "child"
+"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"foo = "user"
+dangerously_trust_all_projects = true
+"#,
+    )
+    .await?;
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(&nested)?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+    let project_layers: Vec<_> = layers
+        .all_layers_high_to_low()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    let expected_project_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::Project {
+            dot_codex_folder: AbsolutePathBuf::from_absolute_path(dot_codex)?,
+        },
+        toml::from_str(
+            r#"foo = "child"
+"#,
+        )
+        .expect("parse project config"),
+    );
+    assert_eq!(project_layers, vec![&expected_project_layer]);
+    assert_eq!(
+        layers.effective_config().get("foo"),
+        Some(&TomlValue::String("child".to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_untrusted_project_layer_disabled_when_trust_all() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        r#"foo = "child"
+"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Untrusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let config = tokio::fs::read_to_string(&config_path).await?;
+    tokio::fs::write(
+        &config_path,
+        format!(
+            r#"foo = "user"
+dangerously_trust_all_projects = true
+{config}"#
+        ),
+    )
+    .await?;
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(&nested)?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+    let project_layers: Vec<_> = layers
+        .all_layers_high_to_low()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 1);
+    assert!(project_layers[0].disabled_reason.is_some());
+    assert_eq!(
+        layers.effective_config().get("foo"),
+        Some(&TomlValue::String("user".to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn project_layer_ignores_unsupported_config_keys() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
